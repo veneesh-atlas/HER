@@ -1,26 +1,302 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* ── HER Design System ─ Inspired by the film "Her" (2013) ── */
+/* Warm, analog, intimate — like handwritten letters on cream paper */
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-her-bg: #F7F2EA;
+  --color-her-surface: #EFE6DA;
+  --color-her-surface-light: #F3ECE2;
+  --color-her-border: #DDD0C2;
+  --color-her-text: #2E2723;
+  --color-her-text-muted: #6F625A;
+  --color-her-accent: #C96E5A;
+  --color-her-accent-hover: #B85C4B;
+  --color-her-accent-soft: rgba(201, 110, 90, 0.08);
+  --color-her-glow: rgba(201, 110, 90, 0.06);
+  --color-her-user-bubble: #E4BDB0;
+  --color-her-ai-bubble: #EDE4D8;
+  --color-her-warm-shadow: rgba(180, 140, 110, 0.06);
+  --color-her-composer: #F5EDE4;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ── Base ─────────────────────────────────────────────────────── */
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  /* Stable viewport height for mobile — prevents layout shifts from browser chrome */
+  height: 100%;
+  height: -webkit-fill-available;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: #F7F2EA;
+  color: #2E2723;
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  /* Prevent pull-to-refresh and overscroll bounce in PWA */
+  touch-action: pan-x pan-y;
+  height: 100%;
+  height: -webkit-fill-available;
+  /* Safe area padding for notched/cutout devices */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+}
+
+/* ── PWA Standalone Mode ─────────────────────────────────── */
+
+@media (display-mode: standalone) {
+  /* When installed as PWA, ensure full immersion */
+  body {
+    overscroll-behavior: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* Allow text selection inside message bubbles and input */
+  .message-content,
+  .composer-textarea {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+}
+
+/* ── Touch Chrome Prevention ─────────────────────────────── */
+
+button, a {
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+}
+
+/* ── Scrollbar ──────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 3px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(221, 208, 194, 0.6);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(196, 181, 164, 0.8);
+}
+
+/* ── Caret ─────────────────────────────────────────────────── */
+
+textarea,
+input[type="text"] {
+  caret-color: #C96E5A;
+}
+
+/* ── Animations ─────────────────────────────────────────────── */
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes messageSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pageEnter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes softPulse {
+  0%, 100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+@keyframes breathe {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes gradientShift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+@keyframes warmGlow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(201, 110, 90, 0);
+  }
+  50% {
+    box-shadow: 0 0 20px 2px rgba(201, 110, 90, 0.06);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.35s ease-out forwards;
+}
+
+.animate-message-in {
+  animation: messageSlideIn 0.4s cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+}
+
+.animate-page-enter {
+  animation: pageEnter 0.5s ease-out forwards;
+}
+
+.animate-soft-pulse {
+  animation: softPulse 1.8s ease-in-out infinite;
+}
+
+.animate-breathe {
+  animation: breathe 3.5s ease-in-out infinite;
+}
+
+.animate-float {
+  animation: float 4s ease-in-out infinite;
+}
+
+.animate-gradient {
+  background-size: 200% 200%;
+  animation: gradientShift 6s ease infinite;
+}
+
+/* ── Warm Glow Effect ───────────────────────────────────────── */
+
+.glow-accent {
+  box-shadow: 0 0 40px rgba(201, 110, 90, 0.08),
+              0 0 80px rgba(201, 110, 90, 0.04);
+}
+
+.text-gradient {
+  background: linear-gradient(135deg, #C96E5A, #D4917F, #C96E5A);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Selection ──────────────────────────────────────────────── */
+
+::selection {
+  background-color: rgba(201, 110, 90, 0.15);
+  color: #2E2723;
+}
+
+/* ── Focus Ring ─────────────────────────────────────────────── */
+
+.focus-warm:focus,
+.focus-warm:focus-visible {
+  outline: none !important;
+  border-color: rgba(201, 110, 90, 0.25);
+  box-shadow: 0 0 0 2px rgba(201, 110, 90, 0.08),
+              0 1px 2px rgba(180, 140, 110, 0.06);
+}
+
+/* ── Composer Textarea Polish ───────────────────────────────── */
+
+.composer-textarea {
+  resize: none !important;
+  -webkit-appearance: none;
+  appearance: none;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.composer-textarea::-webkit-resizer {
+  display: none !important;
+}
+
+.composer-textarea::-webkit-scrollbar {
+  display: none;
+}
+
+.composer-textarea::-webkit-inner-spin-button,
+.composer-textarea::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.composer-textarea::placeholder {
+  color: rgba(111, 98, 90, 0.28);
+  font-weight: 300;
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+.composer-textarea:focus::placeholder {
+  opacity: 0.4;
+  transform: translateX(2px);
+}
+
+.composer-textarea:focus {
+  outline: none !important;
+  outline-offset: 0 !important;
+}
+
+/* ── Chat Scrolling ────────────────────────────────────── */
+
+.chat-scroll {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
+/* ── Message Safety ───────────────────────────────────── */
+
+.message-content {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  hyphens: auto;
 }
