@@ -11,14 +11,19 @@ interface MessageBubbleProps {
   message: Message;
   showTimestamp?: boolean;
   index?: number;
+  /** True when this message is actively being streamed */
+  isStreaming?: boolean;
 }
 
-export default function MessageBubble({ message, showTimestamp = false, index = 0 }: MessageBubbleProps) {
+export default function MessageBubble({ message, showTimestamp = false, index = 0, isStreaming = false }: MessageBubbleProps) {
   const isUser = message.role === "user";
   const hasImage = !!message.image;
   const hasText = message.content.length > 0 && message.content !== "(shared a photo)";
   const isShort = !hasImage && message.content.length <= 40;
   const isLong = !hasImage && message.content.length > 600;
+  const isEmptyStreaming = isStreaming && !hasText && !hasImage;
+  const isImageLoading = !!message.imageLoading;
+  const isGeneratedImage = hasImage && !isUser;
 
   const time = new Date(message.timestamp).toLocaleTimeString([], {
     hour: "numeric",
@@ -57,14 +62,33 @@ export default function MessageBubble({ message, showTimestamp = false, index = 
             : "rounded-bl-lg bg-her-ai-bubble/85 text-her-text shadow-[0_1px_4px_rgba(180,140,110,0.07)]"
         }`}
       >
-        {/* Image */}
+        {/* Image loading shimmer */}
+        {isImageLoading && !hasImage && (
+          <div className="animate-image-shimmer w-full rounded-[14px] sm:rounded-[16px]" style={{ height: "240px" }} />
+        )}
+
+        {/* Image — user-attached or AI-generated */}
         {hasImage && (
           <img
             src={message.image}
-            alt="Shared photo"
-            className={`w-full rounded-[14px] object-cover sm:rounded-[16px] ${hasText ? "mb-2" : ""}`}
-            style={{ maxHeight: "280px" }}
+            alt={isGeneratedImage ? "Generated image" : "Shared photo"}
+            className={`w-full rounded-[14px] object-cover sm:rounded-[16px] ${
+              isGeneratedImage ? "animate-fade-in shadow-[0_2px_16px_rgba(180,140,110,0.18)]" : ""
+            } ${hasText ? "mb-2" : ""}`}
+            style={{ maxHeight: isGeneratedImage ? "360px" : "280px" }}
           />
+        )}
+
+        {/* Streaming presence — shown when content is still empty */}
+        {isEmptyStreaming && (
+          <div className="flex items-center gap-2 px-1 py-0.5">
+            <div className="animate-presence-breathe h-[5px] w-[5px] rounded-full bg-her-accent/50" />
+            <div className="flex items-center gap-[3px]">
+              <span className="h-[3px] w-[3px] rounded-full bg-her-accent/20" style={{ animation: "softPulse 2s ease-in-out infinite" }} />
+              <span className="h-[3px] w-[3px] rounded-full bg-her-accent/20" style={{ animation: "softPulse 2s ease-in-out infinite", animationDelay: "0.4s" }} />
+              <span className="h-[3px] w-[3px] rounded-full bg-her-accent/20" style={{ animation: "softPulse 2s ease-in-out infinite", animationDelay: "0.8s" }} />
+            </div>
+          </div>
         )}
 
         {/* Text */}
@@ -76,6 +100,7 @@ export default function MessageBubble({ message, showTimestamp = false, index = 
                 {line}
               </span>
             ))}
+            {isStreaming && <span className="animate-stream-cursor" />}
           </div>
         )}
       </div>

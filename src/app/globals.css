@@ -246,6 +246,45 @@ input[type="text"] {
   animation: sessionFade 0.4s ease-out forwards;
 }
 
+@keyframes streamCursorBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.animate-stream-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 0.9em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background-color: var(--color-her-accent);
+  opacity: 0.6;
+  animation: streamCursorBlink 1s ease-in-out infinite;
+}
+
+/* ── Image Generation Shimmer ───────────────────────────────── */
+
+@keyframes imageShimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-image-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--color-her-surface) 25%,
+    var(--color-her-surface-light) 37%,
+    var(--color-her-surface) 63%
+  );
+  background-size: 200% 100%;
+  animation: imageShimmer 1.8s ease-in-out infinite;
+  border-radius: 14px;
+}
+
 .animate-breathe {
   animation: breathe 3.5s ease-in-out infinite;
 }

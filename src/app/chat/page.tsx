@@ -55,6 +55,38 @@ function dbMessageToUiMessage(dbMsg: DbMessage): Message {
   };
 }
 
+// ── Image-intent detection ──
+
+const IMAGE_PATTERNS = [
+  /\b(generate|create|make|paint|draw|sketch|design)\b.{0,20}\b(image|picture|photo|illustration|art|painting|portrait|drawing)\b/i,
+  /\b(imagine|visualize|picture)\b.{0,30}\b(of|for|with|a|an|the|me)\b/i,
+  /\b(show me|can you draw|can you paint|can you create|can you make)\b/i,
+  /\bdraw\s+(me\s+)?a\b/i,
+  /\bpaint\s+(me\s+)?a\b/i,
+  /\bsketch\s+(me\s+)?a\b/i,
+];
+
+/** Detect if a user message is asking for image generation */
+function isImageRequest(text: string): boolean {
+  return IMAGE_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+/** Strip the intent keywords from the prompt to get a cleaner image description */
+function extractImagePrompt(text: string): string {
+  let prompt = text
+    .replace(/\b(please|can you|could you|would you|i'd like you to|i want you to)\b/gi, "")
+    .replace(/\b(generate|create|make|draw|sketch|design|paint|imagine|visualize|picture|show me)\b/gi, "")
+    .replace(/\b(an? |the |me |of |for )\b/gi, " ")
+    .replace(/\b(image|picture|photo|illustration|art|painting|portrait|drawing)\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  // If stripping removed everything meaningful, use the original text
+  if (prompt.length < 5) prompt = text.trim();
+
+  return prompt;
+}
+
 export default function ChatPage() {
   const { user, isAuthenticated, loading: authLoading } = useAuth();
 
@@ -80,6 +112,9 @@ export default function ChatPage() {
 
   // Session key — increments on session switch to trigger fade animation
   const [sessionKey, setSessionKey] = useState(0);
+
+  // Scroll trigger — increments during streaming to keep auto-scroll working
+  const [scrollTrigger, setScrollTrigger] = useState(0);
 
   // ── Restore from localStorage (client-only, after hydration) ──
   useEffect(() => {
@@ -228,6 +263,150 @@ export default function ChatPage() {
     // Create a stable ID for the streaming assistant message
     const herMessageId = generateId();
 
+    // ── Vision analysis branch (user uploaded an image) ──
+    if (image) {
+      const visionPrompt = content || "Describe this image in detail.";
+      console.log(`[HER] Vision request — prompt: "${visionPrompt.slice(0, 60)}"`);
+
+      try {
+        // Show placeholder while vision model analyzes
+        setIsTyping(false);
+        setIsStreaming(true);
+
+        const herPlaceholder: Message = {
+          id: herMessageId,
+          role: "assistant",
+          content: "let me look closely…",
+          timestamp: Date.now(),
+        };
+        setMessages((prev) => [...prev, herPlaceholder]);
+        setScrollTrigger((n) => n + 1);
+
+        const res = await fetch("/api/vision", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image, prompt: visionPrompt }),
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({ error: "Failed to analyze image" }));
+          throw new Error(errData.error || "i couldn't read that image just now… try another one.");
+        }
+
+        const data = await res.json();
+
+        if (!data.message) {
+          throw new Error("i looked closely but couldn't put it into words… try again?");
+        }
+
+        // ── Vision complete — finalize ──
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === herMessageId
+              ? { ...m, content: data.message, timestamp: Date.now() }
+              : m
+          )
+        );
+        setScrollTrigger((n) => n + 1);
+
+        // ── Persist assistant vision response to Supabase ──
+        if (convoId) {
+          saveMessageToSupabase({
+            conversationId: convoId,
+            userId,
+            role: "assistant",
+            content: data.message,
+          }).catch(() => {});
+          touchConversation(convoId).catch(() => {});
+          refreshConversations().catch(() => {});
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "something went wrong";
+        setError(msg);
+        setMessages((prev) => prev.filter((m) => m.id !== herMessageId));
+        setIsTyping(false);
+      } finally {
+        setIsStreaming(false);
+        sendingRef.current = false;
+      }
+      return; // Exit early — vision path complete
+    }
+
+    // ── Image generation branch ──
+    if (isImageRequest(content)) {
+      const imagePrompt = extractImagePrompt(content);
+      console.log(`[HER] Image request detected — prompt: "${imagePrompt}"`);
+
+      try {
+        // Transition: show typing then show placeholder with imageLoading
+        setIsTyping(false);
+        setIsStreaming(true);
+
+        const herPlaceholder: Message = {
+          id: herMessageId,
+          role: "assistant",
+          content: "imagining something beautiful…",
+          timestamp: Date.now(),
+          imageLoading: true,
+        };
+        setMessages((prev) => [...prev, herPlaceholder]);
+        setScrollTrigger((n) => n + 1);
+
+        const res = await fetch("/api/imagine", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt: imagePrompt }),
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({ error: "Failed to generate image" }));
+          throw new Error(errData.error || "i couldn't paint that just now… try again in a moment.");
+        }
+
+        const data = await res.json();
+
+        if (!data.image) {
+          throw new Error("i imagined it but couldn't capture it… try again?");
+        }
+
+        // ── Image generated — finalize ──
+        const captionText = `here's what i imagined ✨`;
+
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === herMessageId
+              ? { ...m, content: captionText, image: data.image, imageLoading: false, timestamp: Date.now() }
+              : m
+          )
+        );
+        setScrollTrigger((n) => n + 1);
+
+        // ── Persist assistant image message to Supabase ──
+        if (convoId) {
+          saveMessageToSupabase({
+            conversationId: convoId,
+            userId,
+            role: "assistant",
+            content: captionText,
+            imageUrl: data.image,
+          }).catch(() => {});
+          touchConversation(convoId).catch(() => {});
+          refreshConversations().catch(() => {});
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "something went wrong";
+        setError(msg);
+        setMessages((prev) => prev.filter((m) => m.id !== herMessageId));
+        setIsTyping(false);
+      } finally {
+        setIsStreaming(false);
+        sendingRef.current = false;
+      }
+      return; // Exit early — image path complete
+    }
+
+    // ── Text streaming branch (existing) ──
+
     try {
       const res = await fetch("/api/chat?stream=true", {
         method: "POST",
@@ -273,6 +452,8 @@ export default function ChatPage() {
             m.id === herMessageId ? { ...m, content: textSoFar } : m
           )
         );
+        // Trigger scroll to keep up with growing text
+        setScrollTrigger((n) => n + 1);
       }
 
       // ── Stream complete — finalize ──
@@ -402,7 +583,7 @@ export default function ChatPage() {
         </div>
       )}
 
-      <ChatWindow>
+      <ChatWindow scrollTrigger={scrollTrigger}>
         <div key={sessionKey} className="animate-session-fade">
           {/* Empty state — shown when conversation only has the greeting */}
           {!isTyping && messages.length === 1 && messages[0].id === "greeting" && (
@@ -415,7 +596,8 @@ export default function ChatPage() {
               key={msg.id}
               message={msg}
               index={i}
-              showTimestamp={i === 0 || i === messages.length - 1}
+              showTimestamp={!isStreaming && (i === 0 || i === messages.length - 1)}
+              isStreaming={isStreaming && i === messages.length - 1 && msg.role === "assistant"}
             />
           ))}
         </div>

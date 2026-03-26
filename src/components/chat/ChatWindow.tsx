@@ -12,9 +12,11 @@ import { useEffect, useRef } from "react";
 interface ChatWindowProps {
   children?: React.ReactNode;
   autoScroll?: boolean;
+  /** Changing this value triggers a scroll-to-bottom check (e.g. increment during streaming) */
+  scrollTrigger?: number;
 }
 
-export default function ChatWindow({ children, autoScroll = true }: ChatWindowProps) {
+export default function ChatWindow({ children, autoScroll = true, scrollTrigger }: ChatWindowProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -27,7 +29,7 @@ export default function ChatWindow({ children, autoScroll = true }: ChatWindowPr
     if (isNearBottom) {
       bottomRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
     }
-  }, [children, autoScroll]);
+  }, [children, autoScroll, scrollTrigger]);
 
   return (
     <div
