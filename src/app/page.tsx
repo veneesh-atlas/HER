@@ -18,11 +18,6 @@ export default function LandingPage() {
           HER
         </h1>
 
-        {/* Tagline — quiet context, felt more than read */}
-        <p className="mt-3 font-light tracking-[0.06em] text-her-text-muted/35 text-[12px] sm:mt-4 sm:text-[13px]">
-          an ai companion that feels different
-        </p>
-
         {/* CTA — a quiet invitation, tightly coupled to the title */}
         <Link
           href="/chat"
