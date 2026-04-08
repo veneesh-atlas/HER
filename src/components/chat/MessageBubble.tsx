@@ -170,8 +170,13 @@ function MessageBubbleInner({ message, showTimestamp = false, index = 0, isStrea
     swipeTriggeredRef.current = false;
     longPressFired.current = false;
 
-    // Start long-press timer for emoji tray (mobile)
-    if (canReact) {
+    // Don't start long-press emoji timer if the user is touching selectable text.
+    // This lets the native text selection / copy menu work normally.
+    const target = e.target as HTMLElement;
+    const isTextContent = target.closest(".msg-text-selectable") !== null;
+
+    // Start long-press timer for emoji tray (mobile) — but only on non-text areas
+    if (canReact && !isTextContent) {
       if (longPressTimer.current) clearTimeout(longPressTimer.current);
       longPressTimer.current = setTimeout(() => {
         longPressFired.current = true;
@@ -407,7 +412,7 @@ function MessageBubbleInner({ message, showTimestamp = false, index = 0, isStrea
 
         {/* Text */}
         {hasText && !isThinkingState && !isImageLoading && (
-          <div className={`text-[13.5px] leading-[1.7] tracking-[0.005em] sm:text-[14.5px] sm:leading-[1.75] ${hasImage ? "px-3.5 pb-3 pt-1.5 sm:px-4" : ""}`}>
+          <div className={`msg-text-selectable text-[13.5px] leading-[1.7] tracking-[0.005em] sm:text-[14.5px] sm:leading-[1.75] ${hasImage ? "px-3.5 pb-3 pt-1.5 sm:px-4" : ""}`}>
             {message.content.split("\n").map((line, i) => (
               <span key={i}>
                 {i > 0 && <br />}

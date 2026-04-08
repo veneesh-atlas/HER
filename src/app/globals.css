@@ -63,6 +63,7 @@ body {
 
   /* Allow text selection inside message bubbles and input */
   .message-content,
+  .msg-text-selectable,
   .composer-textarea {
     user-select: text;
     -webkit-user-select: text;
@@ -435,6 +436,13 @@ input[type="text"] {
   overflow-wrap: break-word;
   word-break: normal;
   hyphens: none;
+}
+
+/* Allow native long-press copy on message text (mobile) */
+.msg-text-selectable {
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
 }
 
 /* ── History Drawer ──────────────────────────────────── */
