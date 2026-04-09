@@ -61,14 +61,13 @@ export async function validateApiRequest(req: NextRequest): Promise<AuthResult> 
   }
 
   const authHeader = req.headers.get("authorization");
+
+  // No auth header = guest mode — allow the request but with limited identity.
+  // Guest users get a device-based UUID from the client side (supabase-persistence.ts).
+  // This keeps the app fully usable without sign-in while still protecting
+  // authenticated users' data via token verification below.
   if (!authHeader?.startsWith("Bearer ")) {
-    return {
-      userId: null,
-      error: NextResponse.json(
-        { error: "Missing or invalid authorization header" },
-        { status: 401 }
-      ),
-    };
+    return { userId: "guest", error: null };
   }
 
   const token = authHeader.slice(7); // Remove "Bearer "
