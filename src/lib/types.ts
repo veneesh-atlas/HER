@@ -54,6 +54,8 @@ export interface ConversationConfig {
   responseModeInstruction?: string;
   /** Anti-repetition variation instruction (Step 21) */
   antiRepetitionInstruction?: string;
+  /** IANA timezone name from the user's browser (e.g. "Asia/Kolkata") */
+  userTimezone?: string;
 }
 
 // ── Session ────────────────────────────────────────────────
@@ -80,6 +82,8 @@ export interface ChatRequest {
   responseModeInstruction?: string;
   /** Anti-repetition variation instruction (Step 21) */
   antiRepetitionInstruction?: string;
+  /** IANA timezone name from the user's browser */
+  userTimezone?: string;
 }
 
 export interface ChatResponse {

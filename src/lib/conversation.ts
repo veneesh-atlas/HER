@@ -54,6 +54,7 @@ export function buildPayload(
     rapportLevel: fullConfig.rapportLevel,
     responseModeInstruction: fullConfig.responseModeInstruction,
     antiRepetitionInstruction: fullConfig.antiRepetitionInstruction,
+    userTimezone: fullConfig.userTimezone,
   };
 
   return buildContext(messages, contextOptions);

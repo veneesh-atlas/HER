@@ -15,7 +15,7 @@ import type { TemporalIntent } from "./temporal";
 
 // ── Types ──────────────────────────────────────────────────
 
-export type ScheduledEventType = "reminder" | "followup" | "nudge";
+export type ScheduledEventType = "reminder" | "followup" | "nudge" | "promise";
 export type ScheduledEventStatus = "pending" | "sent" | "cancelled";
 
 export interface ScheduledEvent {
@@ -27,9 +27,15 @@ export interface ScheduledEvent {
   context: {
     summary: string;
     emotionalWeight: "low" | "medium" | "high";
-    category: "event" | "task" | "plan" | "nudge";
+    category: "event" | "task" | "plan" | "nudge" | "promise";
     /** Original user message that triggered this (for HER's reference) */
     originalMessage?: string;
+    /** Promise-only: short semantic description of what HER agreed to do/say */
+    promiseIntent?: string;
+    /** Promise-only: the user's original ask (for delivery context) */
+    userRequest?: string;
+    /** Promise-only: HER's confirming reply text (for voice continuity) */
+    agentReply?: string;
   };
   status: ScheduledEventStatus;
   created_at: string;
@@ -64,6 +70,11 @@ function applyTimingVariance(triggerAt: string, type: string): string {
     case "nudge":
       // ±30 minutes random within safe window
       offsetMs = (Math.random() - 0.5) * 60 * 60 * 1000;
+      break;
+    case "promise":
+      // Promises must land close to the asked time. The 5-min cron already
+      // adds 0–5 min slack, so we keep the offset at zero (jitter only).
+      offsetMs = 0;
       break;
     default:
       offsetMs = (1 + Math.random() * 4) * 60 * 1000;

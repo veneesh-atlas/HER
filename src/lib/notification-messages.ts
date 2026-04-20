@@ -60,8 +60,15 @@ export async function buildNotificationMessage(
 ): Promise<string> {
   const { NVIDIA_CHAT_URL, NVIDIA_CHAT_MODEL } = await import("./provider");
 
-  const typeLabel =
-    event.type === "reminder"
+  // ── Promise fulfilment path ──
+  // For "promise" events, we don't generate a generic check-in — we deliver
+  // exactly what HER agreed to. The LLM gets HER's own confirming words as
+  // a voice anchor and the semantic intent of what to fulfill.
+  const isPromise = event.type === "promise";
+
+  const typeLabel = isPromise
+    ? "the moment to fulfill a promise you made earlier"
+    : event.type === "reminder"
       ? "a gentle nudge about something they need to do"
       : event.type === "followup"
       ? "a natural check-in about how something went"
@@ -75,13 +82,36 @@ export async function buildNotificationMessage(
     ? `\n\nThings you remember about this person:\n${memoryContext}`
     : "";
 
-  const userPrompt = `Type: ${typeLabel}
+  let userPrompt: string;
+
+  if (isPromise) {
+    // Promise context: ALL fields below are LLM-extracted, never hardcoded
+    const promiseIntent = event.context.promiseIntent || event.context.summary;
+    const userRequest = event.context.userRequest || event.context.originalMessage || "";
+    const agentReply = event.context.agentReply || "";
+
+    userPrompt = `This is the moment to fulfill a promise you made earlier.
+
+What you promised to do: ${promiseIntent}
+Their original ask: "${userRequest}"
+${agentReply ? `Your exact words when you agreed: "${agentReply}"` : ""}
+${memoryNote}${avoidanceNote}
+
+Deliver the promise NOW, in your voice. Stay consistent with how you originally agreed — same energy, same warmth, same playfulness.
+- Don't say "as promised" or "you asked me to" — just do it like you've been waiting to send it
+- Don't preface or explain — just BE it
+- Match the emotional weight: ${event.context.emotionalWeight}
+- Keep it short, alive, real
+- One short message`;
+  } else {
+    userPrompt = `Type: ${typeLabel}
 Summary: ${event.context.summary}
 Emotional weight: ${event.context.emotionalWeight}
 Category: ${event.context.category}
 ${event.context.originalMessage ? `Their original message: "${event.context.originalMessage}"` : ""}${memoryNote}${avoidanceNote}
 
 Generate a single short message.`;
+  }
 
   const generateOnce = async (): Promise<string | null> => {
     try {

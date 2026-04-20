@@ -28,6 +28,7 @@ import {
   type DbMessage,
 } from "@/lib/supabase-persistence";
 import { computeRapportLevel, type RapportLevel } from "@/lib/rapport";
+import { detectUserTimezone } from "@/lib/notification-settings";
 import { useAuth } from "@/components/AuthProvider";
 import ChatHeader from "@/components/chat/ChatHeader";
 import ChatWindow from "@/components/chat/ChatWindow";
@@ -838,6 +839,7 @@ export default function ChatPage() {
           continuityContext: [continuityContext, reactionContext].filter(Boolean).join("\n") || undefined,
           responseModeInstruction,
           antiRepetitionInstruction,
+          userTimezone: detectUserTimezone(),
         }),
         signal: controller.signal,
       }, accessTokenRef.current);
@@ -928,6 +930,8 @@ export default function ChatPage() {
             message: userMessage.content,
             conversationId: convoId,
             recentContext: recentCtx,
+            userTimezone: detectUserTimezone(),
+            agentReply: fullText,
           }),
         }, accessTokenRef.current).catch(() => {});
       }

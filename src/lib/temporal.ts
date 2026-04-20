@@ -9,11 +9,11 @@
  * naturally, like a close friend would.
  */
 
-// ── Types ──────────────────────────────────────────────────
+// ── Types ────────────────────────────────────────────────────
 
-export type EventType = "reminder" | "followup";
+export type EventType = "reminder" | "followup" | "promise";
 export type EmotionalWeight = "low" | "medium" | "high";
-export type EventCategory = "event" | "task" | "plan";
+export type EventCategory = "event" | "task" | "plan" | "promise";
 
 export interface TemporalIntent {
   type: EventType;
@@ -23,6 +23,12 @@ export interface TemporalIntent {
     summary: string;
     emotionalWeight: EmotionalWeight;
     category: EventCategory;
+    /** Promise-only: short semantic description of what HER agreed to do/say */
+    promiseIntent?: string;
+    /** Promise-only: the user's original ask (for delivery context) */
+    userRequest?: string;
+    /** Promise-only: HER's confirming reply text (for voice continuity) */
+    agentReply?: string;
   };
 }
 
@@ -37,7 +43,7 @@ const TEMPORAL_WORDS =
   /\b(hour|hours|minute|minutes|tomorrow|tonight|today|morning|afternoon|evening|night|week|weeks|month|months|monday|tuesday|wednesday|thursday|friday|saturday|sunday|january|february|march|april|may|june|july|august|september|october|november|december|am|pm|o'?clock|\d{1,2}:\d{2}|\d{1,2}\/\d{1,2})\b/i;
 
 const FUTURE_INTENT =
-  /\b(going to|have to|need to|will|gotta|gonna|should|planning|plan to|scheduled|booked|booking|about to|supposed to|deadline|due|by the time|later|next|upcoming|in a few|in an? )\b/i;
+  /\b(going to|have to|need to|will|gotta|gonna|should|planning|plan to|scheduled|booked|booking|about to|supposed to|deadline|due|by the time|later|next|upcoming|in a few|in an? |promise|tell me|say|send me|message me|wish me|remind me)\b/i;
 
 const EVENT_NOUNS =
   /\b(interview|meeting|appointment|exam|test|flight|trip|travel|doctor|dentist|class|lecture|presentation|deadline|wedding|birthday|party|reservation|call|date|workout|gym|pickup|drop.?off|checkout|check.?in)\b/i;
@@ -52,52 +58,74 @@ export function hasTemporalSignal(message: string): boolean {
 
 // ── LLM-based Detection ────────────────────────────────────
 
-const DETECTION_SYSTEM_PROMPT = `You analyze user messages to detect if they imply a future event or task that may require a reminder or follow-up.
+const DETECTION_SYSTEM_PROMPT = `You analyze a user message (and HER's reply, if provided) to detect if they imply a future event, task, or PROMISE that may require a scheduled message.
 
 Return ONLY valid JSON. No markdown, no explanation.
 
 Do NOT assume intent unless it is reasonably clear.
 Do NOT hallucinate or guess times. If the time is unclear, set triggerAt to null.
-If there is no clear future event/task intent, return exactly: null
+If there is no clear intent, return exactly: null
 
-Classify into:
+Classify into one of:
 - "reminder" — a task the user must do (book tickets, call someone, submit work)
-- "followup" — an event outcome to check on later (interview result, trip experience, exam result)
+- "followup" — an event outcome to check on later (interview result, trip, exam)
+- "promise" — the USER asked HER to do or say something specific at a future time
+  (e.g. "tell me you love me in 2 hours", "send me a hype message at 5pm",
+  "remind me you're proud of me tonight", "say good morning at 7am")
 
-Output format:
+CRITICAL rules for "promise":
+- ONLY classify as promise if the user clearly asked HER to take an action at a specific time
+- ONLY confirm the promise if HER's reply (if provided) ACCEPTS or AGREES — if HER refused, declined, or ignored, return null
+- promiseIntent must be a short semantic description of what HER will do ("say I love you", "send a poem about rain", "wish them luck for the meeting")
+- userRequest must quote the user's ask, lightly cleaned
+- agentReply (if provided) IS HER's confirming words — echo it verbatim in the agentReply field
+
+Output format (use the fields appropriate to the type):
 {
-  "type": "reminder" | "followup",
+  "type": "reminder" | "followup" | "promise",
   "triggerAt": "ISO 8601 timestamp or null",
   "context": {
     "summary": "short natural 5-15 word summary",
     "emotionalWeight": "low" | "medium" | "high",
-    "category": "event" | "task" | "plan"
+    "category": "event" | "task" | "plan" | "promise",
+    "promiseIntent": "only for promise type",
+    "userRequest": "only for promise type",
+    "agentReply": "only for promise type, echo HER's confirming words"
   }
 }
 
-Rules:
+General rules:
 - If no clear intent → return null
 - If time is unclear → set triggerAt to null (do NOT guess)
-- If vague future mention with no actionable item → return null
-- "emotionalWeight" should reflect how much this matters to the person
-  (interview = high, grocery = low, trip = medium-high)`;
+- For promises, time MUST be clear — if not, return null (don't promise vaguely)
+- "emotionalWeight" reflects how much it matters to the person
+  (interview = high, grocery = low, promise of affection = high)`;
 
 /**
  * Call the LLM to extract structured temporal intent from a message.
  * Returns null if no intent detected or on any failure.
  *
- * @param message — the user's message text
- * @param now — current date (for context in the prompt)
- * @param apiKey — NVIDIA API key
+ * @param message      — the user's message text
+ * @param now          — current absolute time
+ * @param apiKey       — NVIDIA API key
+ * @param userTimezone — IANA tz name; required to correctly resolve
+ *                       wall-clock references like "tomorrow 9am"
  */
 export async function detectTemporalIntent(
   message: string,
   now: Date,
-  apiKey: string
+  apiKey: string,
+  userTimezone?: string,
+  agentReply?: string
 ): Promise<TemporalIntent | null> {
   const { NVIDIA_CHAT_URL, NVIDIA_CHAT_MODEL } = await import("./provider");
+  const { formatLocalTimeView, buildTemporalTimeHeader } = await import("./timezone");
+  const timeHeader = buildTemporalTimeHeader(formatLocalTimeView(now, userTimezone));
 
-  const userPrompt = `Current date/time: ${now.toISOString()}\n\nUser message:\n"${message}"`;
+  const replyBlock = agentReply
+    ? `\n\nHER's reply (her confirming words — use this to validate any promise):\n"${agentReply}"`
+    : "";
+  const userPrompt = `${timeHeader}\n\nUser message:\n"${message}"${replyBlock}`;
 
   try {
     const res = await fetch(NVIDIA_CHAT_URL, {
@@ -112,10 +140,10 @@ export async function detectTemporalIntent(
           { role: "system", content: DETECTION_SYSTEM_PROMPT },
           { role: "user", content: userPrompt },
         ],
-        max_tokens: 200,
+        max_tokens: 320,
         temperature: 0.1, // Low temp for structured output
       }),
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(30_000),
     });
 
     if (!res.ok) {
@@ -135,7 +163,15 @@ export async function detectTemporalIntent(
     if (!parsed || !parsed.type || !parsed.context?.summary) return null;
 
     // Validate type
-    if (parsed.type !== "reminder" && parsed.type !== "followup") return null;
+    if (!(["reminder", "followup", "promise"] as const).includes(parsed.type)) return null;
+
+    // Promises require triggerAt + promiseIntent — anything weaker is unsafe to schedule
+    if (parsed.type === "promise") {
+      if (!parsed.triggerAt || !parsed.context?.promiseIntent) {
+        console.warn("[HER Temporal] Promise rejected — missing triggerAt or promiseIntent");
+        return null;
+      }
+    }
 
     return parsed as TemporalIntent;
   } catch (err) {
@@ -284,11 +320,14 @@ export async function detectFollowUpIntent(
   message: string,
   recentContext: string,
   now: Date,
-  apiKey: string
+  apiKey: string,
+  userTimezone?: string
 ): Promise<FollowUpIntent | null> {
   const { NVIDIA_CHAT_URL, NVIDIA_CHAT_MODEL } = await import("./provider");
+  const { formatLocalTimeView, buildTemporalTimeHeader } = await import("./timezone");
+  const timeHeader = buildTemporalTimeHeader(formatLocalTimeView(now, userTimezone));
 
-  const userPrompt = `Current date/time: ${now.toISOString()}
+  const userPrompt = `${timeHeader}
 
 Recent conversation context:
 ${recentContext}
@@ -368,11 +407,14 @@ export async function detectContinuityUpdate(
   message: string,
   eventSummary: string,
   now: Date,
-  apiKey: string
+  apiKey: string,
+  userTimezone?: string
 ): Promise<ContinuityUpdate> {
   const { NVIDIA_CHAT_URL, NVIDIA_CHAT_MODEL } = await import("./provider");
+  const { formatLocalTimeView, buildTemporalTimeHeader } = await import("./timezone");
+  const timeHeader = buildTemporalTimeHeader(formatLocalTimeView(now, userTimezone));
 
-  const userPrompt = `Current date/time: ${now.toISOString()}
+  const userPrompt = `${timeHeader}
 
 Pending event: "${eventSummary}"
 

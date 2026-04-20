@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { message, conversationId, recentContext } = body;
+    const { message, conversationId, recentContext, userTimezone, agentReply } = body;
 
     if (!message || typeof message !== "string") {
       return NextResponse.json({ detected: false }, { status: 200 });
@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
       // ── Continuity learning (Step 18 Part F): detect reschedules ──
       for (const event of pendingEvents) {
         if (resolved.includes(event.id)) continue; // Already resolved
-        const update = await detectContinuityUpdate(message, event.context.summary, new Date(), apiKey);
+        const update = await detectContinuityUpdate(message, event.context.summary, new Date(), apiKey, userTimezone);
         if (update.status === "completed") {
           await cancelEvent(event.id);
           console.log(`[HER Temporal] Continuity: event ${event.id} completed`);
@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
 
     // ── Predictive follow-up (Step 18 Part D): detect vague future intent ──
     if (recentContext) {
-      const followUp = await detectFollowUpIntent(message, recentContext, new Date(), apiKey);
+      const followUp = await detectFollowUpIntent(message, recentContext, new Date(), apiKey, userTimezone);
       if (followUp?.shouldSchedule && followUp.estimatedTime && followUp.confidence >= 0.6) {
         const eventId = await createScheduledEvent({
           userId: auth.userId,
@@ -120,7 +120,7 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Step 2: LLM-based detection ──
-    const intent = await detectTemporalIntent(message, new Date(), apiKey);
+    const intent = await detectTemporalIntent(message, new Date(), apiKey, userTimezone, agentReply);
 
     if (!intent || !intent.triggerAt) {
       return NextResponse.json({ detected: false }, { status: 200 });

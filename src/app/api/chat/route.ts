@@ -97,10 +97,11 @@ export async function POST(req: NextRequest) {
       memoryContext: body.memoryContext,
       responseModeInstruction: body.responseModeInstruction,
       antiRepetitionInstruction: body.antiRepetitionInstruction,
+      userTimezone: body.userTimezone,
     });
 
     console.log(
-      `[HER API] ${body.messages.length} messages → ${payload.length} payload items (mode: ${body.mode || "default"}, rapport: ${body.rapportLevel ?? 0}, memory: ${body.memoryContext ? "yes" : "no"}, adaptiveMode: ${body.responseModeInstruction ? "yes" : "no"}, stream: ${wantsStream})`
+      `[HER API] ${body.messages.length} messages → ${payload.length} payload items (mode: ${body.mode || "default"}, rapport: ${body.rapportLevel ?? 0}, memory: ${body.memoryContext ? "yes" : "no"}, adaptiveMode: ${body.responseModeInstruction ? "yes" : "no"}, tz: ${body.userTimezone || "unknown"}, stream: ${wantsStream})`
     );
 
     // ── Streaming path ──

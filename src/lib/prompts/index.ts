@@ -28,6 +28,7 @@ import { INITIATIVE } from "./initiative";
 import { MODE_OVERLAYS } from "./modes";
 import { buildRapportContext, type RapportLevel } from "../rapport";
 import { buildPersonalityAnchor } from "../personality-guard";
+import { formatLocalTimeView, buildCurrentTimePromptBlock } from "../timezone";
 
 // ── Public Exports ─────────────────────────────────────────
 
@@ -89,6 +90,8 @@ interface PromptOptions {
   memoryContext?: string;
   /** Compact continuity context for anti-repetition */
   continuityContext?: string;
+  /** IANA timezone name from the user's browser (e.g. "Asia/Kolkata") */
+  userTimezone?: string;
 }
 
 /**
@@ -105,22 +108,13 @@ interface PromptOptions {
  *   8. Mode overlay (if any)
  */
 export function buildSystemPrompt(options: PromptOptions = {}): string {
-  // Current date/time awareness — HER always knows what time it is
-  const now = new Date();
-  const dateStr = now.toLocaleDateString("en-US", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-  const timeStr = now.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
+  // Current date/time awareness — always anchored on the user's local timezone
+  // when known, so HER never quotes server UTC at the user.
+  const timeView = formatLocalTimeView(new Date(), options.userTimezone);
+  const timeBlock = buildCurrentTimePromptBlock(timeView);
 
   const layers: string[] = [
-    `CURRENT DATE & TIME: ${dateStr}, ${timeStr} (server time)`,
+    timeBlock,
     PERSONA,
     STYLE,
     DYNAMICS,

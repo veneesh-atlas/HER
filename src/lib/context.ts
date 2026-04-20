@@ -81,6 +81,8 @@ export interface ContextOptions {
   responseModeInstruction?: string;
   /** Anti-repetition variation instruction (Step 21 Part C) */
   antiRepetitionInstruction?: string;
+  /** IANA timezone name from the user's browser */
+  userTimezone?: string;
 }
 
 /**
@@ -120,6 +122,7 @@ export function buildContext(
     rapportLevel: (options.rapportLevel ?? 0) as import("./rapport").RapportLevel,
     conversationSummary: summary ?? undefined,
     memoryContext: memory ?? undefined,
+    userTimezone: options.userTimezone,
     continuityContext: [
       options.continuityContext,
       options.responseModeInstruction,
