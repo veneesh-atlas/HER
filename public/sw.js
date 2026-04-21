@@ -3,7 +3,7 @@
 
 // Cache version — bump on each deployment to invalidate stale assets.
 // Uses a timestamp so every build gets a fresh cache automatically.
-const CACHE_VERSION = "20260409";
+const CACHE_VERSION = "20260421";
 const CACHE_NAME = `her-${CACHE_VERSION}`;
 
 // App shell — the minimum needed for the app to render
@@ -81,7 +81,9 @@ self.addEventListener("notificationclick", (event) => {
 // Fetch: network-first with cache fallback
 // This keeps content fresh while providing offline resilience.
 self.addEventListener("fetch", (event) => {
-  const { request } = event; (POST to /api/chat, etc.)
+  const { request } = event;
+
+  // Only handle GET — POSTs (e.g. /api/chat) bypass the cache entirely.
   if (request.method !== "GET") return;
 
   // Skip API routes — always go to network
