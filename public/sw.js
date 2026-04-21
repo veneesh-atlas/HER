@@ -4,7 +4,7 @@
 // and prevents the "page couldn't load" failure caused by stale HTML
 // referencing old build hashes.
 
-const CACHE_VERSION = "20260421-13";
+const CACHE_VERSION = "20260421-14";
 const CACHE_NAME = `her-static-${CACHE_VERSION}`;
 
 // Install: take over immediately, no pre-caching of pages.

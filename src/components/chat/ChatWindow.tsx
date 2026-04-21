@@ -76,13 +76,27 @@ export default function ChatWindow<T>({
   const atBottomRef = useRef(true);
   /** Throttle: don't fire onScrollNearTop more than once per 250ms. */
   const lastTopFireRef = useRef<number>(0);
+  /**
+   * Pending rAF id for streaming auto-scroll. We coalesce rapid token
+   * updates into a single scroll-to-bottom per animation frame so we don't
+   * fight virtuoso's own internal scroll adjustments, which used to produce
+   * a visible up/down jitter while a message was streaming.
+   */
+  const pendingScrollRafRef = useRef<number | null>(null);
 
-  /** Scroll the underlying DOM container all the way to the bottom. */
+  /**
+   * Scroll the underlying DOM container to the bottom — but only if we're
+   * not already there (within 2px). Skipping the no-op write avoids the
+   * jitter that came from racing with virtuoso's internal layout writes.
+   */
   const scrollToBottom = useCallback(() => {
     const el = scrollerRef.current;
     if (!el || el === window) return;
     const node = el as HTMLElement;
-    node.scrollTop = node.scrollHeight;
+    const target = node.scrollHeight - node.clientHeight;
+    if (target - node.scrollTop > 2) {
+      node.scrollTop = target;
+    }
   }, []);
 
   // ── Force scroll on demand (sent message, switched conversation) ──
@@ -95,16 +109,31 @@ export default function ChatWindow<T>({
   }, [forceScrollTrigger, scrollToBottom]);
 
   // ── Streaming auto-scroll ──
-  // useLayoutEffect runs after React commits the new heights to the DOM.
-  // We then scroll the container directly to its scrollHeight, which is
-  // ALWAYS the true bottom — no index math, no virtuoso item-cache lag,
-  // no fighting with followOutput's stale at-bottom check.
+  // Coalesces rapid `items` changes (one per streaming token) into a single
+  // scroll-to-bottom per animation frame. Without this, our scrollTop write
+  // raced with virtuoso's own internal scroll adjustments token-for-token,
+  // producing visible jitter (looked like the page was "trying to scroll up
+  // and down simultaneously" while HER was typing).
   // Gated on atBottomRef (updated by virtuoso with atBottomThreshold=200)
   // so the pin never overrides a user who scrolled up to read.
   useLayoutEffect(() => {
     if (!atBottomRef.current) return;
-    requestAnimationFrame(scrollToBottom);
+    if (pendingScrollRafRef.current !== null) return; // one pending scroll is enough
+    pendingScrollRafRef.current = requestAnimationFrame(() => {
+      pendingScrollRafRef.current = null;
+      scrollToBottom();
+    });
   }, [items, scrollToBottom]);
+
+  // Cancel any pending scroll on unmount.
+  useEffect(() => {
+    return () => {
+      if (pendingScrollRafRef.current !== null) {
+        cancelAnimationFrame(pendingScrollRafRef.current);
+        pendingScrollRafRef.current = null;
+      }
+    };
+  }, []);
 
   // ── Top-reached handler with light throttle ──
   // Parent already guards re-entry via its own `loadingOlder` flag, so this
