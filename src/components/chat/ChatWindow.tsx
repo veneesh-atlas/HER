@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useCallback } from "react";
-import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import { Virtuoso } from "react-virtuoso";
 
 /**
  * ChatWindow — Virtualized scrollable conversation container.
@@ -60,49 +60,51 @@ export default function ChatWindow<T>({
   footer,
   forceScrollTrigger,
 }: ChatWindowProps<T>) {
-  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  /**
+   * The actual DOM element virtuoso uses as its scroll container. We grab
+   * this via the `scrollerRef` prop and scroll it directly with scrollTop
+   * instead of using virtuoso's scrollToIndex API. Index-based scrolling
+   * was unreliable while messages were growing mid-stream because virtuoso's
+   * internal item-height cache lagged the DOM by one resize.
+   */
+  const scrollerRef = useRef<HTMLElement | Window | null>(null);
   /**
    * Whether the user is currently within `atBottomThreshold` of the bottom.
-   * Updated by virtuoso's atBottomStateChange. Used to gate our manual
-   * streaming pin so we never yank a user who has scrolled up to read.
+   * Updated by virtuoso's atBottomStateChange. Gates our streaming pin so
+   * a user who has scrolled up to read is never yanked back.
    */
   const atBottomRef = useRef(true);
   /** Throttle: don't fire onScrollNearTop more than once per 250ms. */
   const lastTopFireRef = useRef<number>(0);
 
+  /** Scroll the underlying DOM container all the way to the bottom. */
+  const scrollToBottom = useCallback(() => {
+    const el = scrollerRef.current;
+    if (!el || el === window) return;
+    const node = el as HTMLElement;
+    node.scrollTop = node.scrollHeight;
+  }, []);
+
   // ── Force scroll on demand (sent message, switched conversation) ──
   useEffect(() => {
     if (!forceScrollTrigger) return;
+    // Two rAFs so React commit + browser layout both finish before we measure.
     requestAnimationFrame(() => {
-      virtuosoRef.current?.scrollToIndex({
-        index: "LAST",
-        align: "end",
-        behavior: "auto",
-      });
+      requestAnimationFrame(scrollToBottom);
     });
-  }, [forceScrollTrigger]);
+  }, [forceScrollTrigger, scrollToBottom]);
 
   // ── Streaming auto-scroll ──
-  // Why useLayoutEffect (not useEffect) and not virtuoso's followOutput:
-  //   - When an item's content grows mid-stream, virtuoso's at-bottom check
-  //     in followOutput uses PRE-resize measurements. Each token grows the
-  //     bubble ~20px before virtuoso sees it, so after the first token the
-  //     user is technically "not at bottom" and follow stops firing —
-  //     content keeps piling up below the fold.
-  //   - useLayoutEffect on `items` runs after React commit but BEFORE paint,
-  //     so we can scroll using the new measured heights.
-  //   - We gate on atBottomRef (updated by virtuoso with atBottomThreshold=200)
-  //     so the pin never fights a user who has intentionally scrolled away.
+  // useLayoutEffect runs after React commits the new heights to the DOM.
+  // We then scroll the container directly to its scrollHeight, which is
+  // ALWAYS the true bottom — no index math, no virtuoso item-cache lag,
+  // no fighting with followOutput's stale at-bottom check.
+  // Gated on atBottomRef (updated by virtuoso with atBottomThreshold=200)
+  // so the pin never overrides a user who scrolled up to read.
   useLayoutEffect(() => {
     if (!atBottomRef.current) return;
-    requestAnimationFrame(() => {
-      virtuosoRef.current?.scrollToIndex({
-        index: "LAST",
-        align: "end",
-        behavior: "auto",
-      });
-    });
-  }, [items]);
+    requestAnimationFrame(scrollToBottom);
+  }, [items, scrollToBottom]);
 
   // ── Top-reached handler with light throttle ──
   // Parent already guards re-entry via its own `loadingOlder` flag, so this
@@ -188,7 +190,7 @@ export default function ChatWindow<T>({
       onClick={handleContainerClick}
     >
       <Virtuoso
-        ref={virtuosoRef}
+        scrollerRef={(el) => { scrollerRef.current = el; }}
         data={items}
         firstItemIndex={firstItemIndex}
         initialTopMostItemIndex={Math.max(items.length - 1, 0)}
