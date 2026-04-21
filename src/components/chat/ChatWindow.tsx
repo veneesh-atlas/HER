@@ -93,9 +93,15 @@ export default function ChatWindow<T>({
   }, [onScrollNearTop]);
 
   // ── Force scroll on demand (sent message, switched conversation) ──
+  // We schedule the scroll AND set a "settle window" — for the next 600ms,
+  // any height growth (images loading, fonts swapping, MessageBubble children
+  // mounting late) re-pins us to the bottom. Without the window the conversation
+  // could appear to load at the top because scrollHeight at first paint was
+  // smaller than after images settled.
+  const settleUntilRef = useRef(0);
   useEffect(() => {
     if (!forceScrollTrigger) return;
-    // Two rAFs so React commit + browser layout both finish before we measure.
+    settleUntilRef.current = Date.now() + 600;
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         scrollToBottom();
@@ -103,6 +109,26 @@ export default function ChatWindow<T>({
       });
     });
   }, [forceScrollTrigger, scrollToBottom]);
+
+  // ── Stay pinned while content settles (images, fonts, late mounts) ──
+  // ResizeObserver fires whenever the inner content height changes for any
+  // reason — not just React re-renders. We use it to keep the bottom pinned
+  // both during streaming (token-by-token growth) and during the post-load
+  // settle window when async content (images) inflates the document.
+  useEffect(() => {
+    const node = scrollerRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      if (isAtBottomRef.current || Date.now() < settleUntilRef.current) {
+        node.scrollTop = node.scrollHeight;
+      }
+    });
+    // Observe the scroller's first child (the actual content wrapper).
+    // If we observed `node` itself we'd only see clientHeight changes, not
+    // scrollHeight changes.
+    Array.from(node.children).forEach((c) => ro.observe(c));
+    return () => ro.disconnect();
+  }, []);
 
   /**
    * The big effect: handles BOTH streaming-pin (item content grew while we
