@@ -32,6 +32,7 @@ import {
 } from "@/lib/supabase-persistence";
 import { computeRapportLevel, type RapportLevel } from "@/lib/rapport";
 import { detectUserTimezone } from "@/lib/notification-settings";
+import { uploadDataUrlToStorage, isDataUrl } from "@/lib/image-storage";
 import { useAuth } from "@/components/AuthProvider";
 import ChatHeader from "@/components/chat/ChatHeader";
 import ChatWindow from "@/components/chat/ChatWindow";
@@ -141,6 +142,9 @@ function pickRandom(pool: string[]): string {
 /**
  * Fire-and-forget: persist assistant message + touch conversation + refresh list.
  * Extracted to avoid repeating the same 3-call pattern in every send branch.
+ *
+ * If imageUrl is a base64 data URL, it's uploaded to Supabase Storage first
+ * so the messages table only stores a short HTTPS URL, not the full blob.
  */
 async function persistAssistantMessage(
   convoId: string | null,
@@ -151,12 +155,19 @@ async function persistAssistantMessage(
   refreshConversations: () => Promise<void>,
 ): Promise<void> {
   if (!convoId) return;
+
+  // Upload to Storage if it's a base64 data URL — falls back to dataUrl on failure.
+  let finalUrl = imageUrl;
+  if (imageUrl && isDataUrl(imageUrl)) {
+    finalUrl = await uploadDataUrlToStorage(userId, imageUrl);
+  }
+
   saveMessageToSupabase({
     conversationId: convoId,
     userId,
     role: "assistant",
     content,
-    imageUrl,
+    imageUrl: finalUrl,
     clientMessageId,
   }).catch(() => {});
   touchConversation(convoId).catch(() => {});
@@ -617,12 +628,19 @@ export default function ChatPage() {
     }
 
     if (convoId) {
+      // Upload user-attached image to Storage first so the messages row stays small.
+      // Falls back to original data URL if storage isn't configured.
+      let userImageUrl: string | undefined = image || undefined;
+      if (userImageUrl && isDataUrl(userImageUrl)) {
+        userImageUrl = await uploadDataUrlToStorage(userId, userImageUrl);
+      }
+
       saveMessageToSupabase({
         conversationId: convoId,
         userId,
         role: "user",
         content: userMessage.content,
-        imageUrl: image || undefined,
+        imageUrl: userImageUrl,
         clientMessageId: userMessage.id,
         ...(currentReply ? {
           replyToId: currentReply.id,
