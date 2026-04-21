@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 
 /**
@@ -61,6 +61,12 @@ export default function ChatWindow<T>({
   forceScrollTrigger,
 }: ChatWindowProps<T>) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  /**
+   * Whether the user is currently within `atBottomThreshold` of the bottom.
+   * Updated by virtuoso's atBottomStateChange. Used to gate our manual
+   * streaming pin so we never yank a user who has scrolled up to read.
+   */
+  const atBottomRef = useRef(true);
   /** Throttle: don't fire onScrollNearTop more than once per 250ms. */
   const lastTopFireRef = useRef<number>(0);
 
@@ -77,12 +83,26 @@ export default function ChatWindow<T>({
   }, [forceScrollTrigger]);
 
   // ── Streaming auto-scroll ──
-  // Owned by virtuoso's `followOutput="smooth"` (set on the component below):
-  //   - if the user is at the bottom when content grows, it follows;
-  //   - if the user has scrolled away (even slightly), it does NOT yank them.
-  // We deliberately do not call scrollToIndex on every streaming token — that
-  // fought with the user's intent and would yank them back up the moment they
-  // scrolled down to peek at the growing reply.
+  // Why useLayoutEffect (not useEffect) and not virtuoso's followOutput:
+  //   - When an item's content grows mid-stream, virtuoso's at-bottom check
+  //     in followOutput uses PRE-resize measurements. Each token grows the
+  //     bubble ~20px before virtuoso sees it, so after the first token the
+  //     user is technically "not at bottom" and follow stops firing —
+  //     content keeps piling up below the fold.
+  //   - useLayoutEffect on `items` runs after React commit but BEFORE paint,
+  //     so we can scroll using the new measured heights.
+  //   - We gate on atBottomRef (updated by virtuoso with atBottomThreshold=200)
+  //     so the pin never fights a user who has intentionally scrolled away.
+  useLayoutEffect(() => {
+    if (!atBottomRef.current) return;
+    requestAnimationFrame(() => {
+      virtuosoRef.current?.scrollToIndex({
+        index: "LAST",
+        align: "end",
+        behavior: "auto",
+      });
+    });
+  }, [items]);
 
   // ── Top-reached handler with light throttle ──
   // Parent already guards re-entry via its own `loadingOlder` flag, so this
@@ -95,6 +115,11 @@ export default function ChatWindow<T>({
     lastTopFireRef.current = now;
     onScrollNearTop();
   }, [onScrollNearTop]);
+
+  // ── Track near-bottom state for the streaming pin above ──
+  const handleAtBottomChange = useCallback((bottom: boolean) => {
+    atBottomRef.current = bottom;
+  }, []);
 
   /**
    * Clear text selection when tapping on whitespace / non-text areas.
@@ -167,8 +192,8 @@ export default function ChatWindow<T>({
         data={items}
         firstItemIndex={firstItemIndex}
         initialTopMostItemIndex={Math.max(items.length - 1, 0)}
-        followOutput="smooth"
-        atBottomThreshold={50}
+        atBottomStateChange={handleAtBottomChange}
+        atBottomThreshold={200}
         startReached={handleStartReached}
         itemContent={renderItemWrapped}
         components={{ Header: HeaderComp, Footer: FooterComp }}
