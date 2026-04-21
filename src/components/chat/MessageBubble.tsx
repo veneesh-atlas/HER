@@ -478,7 +478,9 @@ function MessageBubbleInner({ message, showTimestamp = false, index = 0, isStrea
       {/* Reaction pills — displayed below the bubble */}
       {message.reactions && Object.keys(message.reactions).length > 0 && (
         <div className={`mt-1 flex flex-wrap gap-1 ${isUser ? "justify-end mr-1.5" : "justify-start ml-1.5"}`}>
-          {Object.entries(message.reactions).map(([emoji, reactors]) => (
+          {Object.entries(message.reactions)
+            .filter((entry): entry is [string, string[]] => Array.isArray(entry[1]) && entry[1].length > 0)
+            .map(([emoji, reactors]) => (
             <button
               key={emoji}
               type="button"

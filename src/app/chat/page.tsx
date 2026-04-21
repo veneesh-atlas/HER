@@ -61,8 +61,29 @@ function createGreeting(content: string): Message {
   };
 }
 
+/**
+ * Reactions are stored as Record<string, string[]> but historical rows may
+ * contain malformed values (e.g. cron-job notification markers stored as
+ * objects). Strip anything that isn't a valid emoji → string[] entry so the
+ * renderer can never crash on bad shape.
+ */
+function sanitizeReactions(
+  raw: unknown,
+): Record<string, string[]> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const out: Record<string, string[]> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (key.startsWith("_")) continue; // sentinel keys like _notification
+    if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
+      out[key] = value as string[];
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /** Convert a Supabase DB message to the UI Message shape */
 function dbMessageToUiMessage(dbMsg: DbMessage): Message {
+  const cleanReactions = sanitizeReactions(dbMsg.reactions);
   return {
     id: dbMsg.id,
     role: dbMsg.role,
@@ -72,7 +93,7 @@ function dbMessageToUiMessage(dbMsg: DbMessage): Message {
     ...(dbMsg.reply_to_id && dbMsg.reply_to_content && dbMsg.reply_to_role
       ? { replyTo: { id: dbMsg.reply_to_id, content: dbMsg.reply_to_content, role: dbMsg.reply_to_role } }
       : {}),
-    ...(dbMsg.reactions ? { reactions: dbMsg.reactions } : {}),
+    ...(cleanReactions ? { reactions: cleanReactions } : {}),
   };
 }
 

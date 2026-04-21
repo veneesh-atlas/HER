@@ -95,8 +95,10 @@ export async function GET(req: NextRequest) {
           user_id: event.user_id,
           role: "assistant",
           content: messageText,
-          // Context tag stored in reactions JSONB column for continuity
-          reactions: { _notification: { source: event.type, event_id: event.id } },
+          // NOTE: previously stored a `_notification` marker under `reactions`,
+          // but that column is shaped Record<string, string[]> and the marker
+          // crashed the chat renderer when these rows were paged in. The marker
+          // was never read anywhere, so we just drop it.
         });
 
         // Touch conversation timestamp
