@@ -179,7 +179,8 @@ export async function GET(req: NextRequest) {
           user_id: userId,
           role: "assistant",
           content: messageText,
-          reactions: { _notification: { source: "nudge", dropoff: !!dropoff?.isDropoff } },
+          // NOTE: see notify/route.ts — do not write `_notification` markers
+          // into the reactions column; it crashes the renderer.
         });
 
         await client
