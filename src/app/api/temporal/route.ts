@@ -81,7 +81,55 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── Predictive follow-up (Step 18 Part D): detect vague future intent ──
+    // ── Step 1: Cheap signal gate ──
+    if (!hasTemporalSignal(message)) {
+      // Even if no temporal signal, the predictive follow-up may still apply
+      // for vague future intent — fall through to it below.
+    } else {
+      // ── Step 2: LLM-based detection (handles reminder / followup / promise) ──
+      // This runs BEFORE the predictive follow-up so explicit promises don't
+      // get misclassified as generic followups.
+      const intent = await detectTemporalIntent(message, new Date(), apiKey, userTimezone, agentReply);
+
+      if (intent && intent.triggerAt) {
+        // ── Step 3: Selective triggering filter ──
+        const triggerDate = new Date(intent.triggerAt);
+        const daysFuture = (triggerDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24);
+
+        if (intent.context.emotionalWeight === "low" && daysFuture > 7) {
+          console.log("[HER Temporal] Skipping low-weight far-future event");
+          return NextResponse.json({ detected: false, reason: "low-weight-far-future" });
+        }
+        if (daysFuture > 30) {
+          console.log("[HER Temporal] Skipping event >30 days out");
+          return NextResponse.json({ detected: false, reason: "too-far-future" });
+        }
+
+        // ── Step 4: Persist scheduled event (with humanized timing) ──
+        const eventId = await createScheduledEvent({
+          userId: auth.userId,
+          conversationId: conversationId || null,
+          intent,
+          originalMessage: message,
+          applyVariance: true,
+        });
+
+        console.log(
+          `[HER Temporal] ${intent.type} detected for user ${auth.userId}: "${intent.context.summary}" → ${intent.triggerAt}`
+        );
+
+        return NextResponse.json({
+          detected: true,
+          type: intent.type,
+          triggerAt: intent.triggerAt,
+          summary: intent.context.summary,
+          eventId,
+        });
+      }
+    }
+
+    // ── Predictive follow-up fallback (Step 18 Part D) ──
+    // Only runs if the main detector didn't pick up an explicit promise/reminder.
     if (recentContext) {
       const followUp = await detectFollowUpIntent(message, recentContext, new Date(), apiKey, userTimezone);
       if (followUp?.shouldSchedule && followUp.estimatedTime && followUp.confidence >= 0.6) {
@@ -114,52 +162,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── Step 1: Cheap signal gate ──
-    if (!hasTemporalSignal(message)) {
-      return NextResponse.json({ detected: false }, { status: 200 });
-    }
-
-    // ── Step 2: LLM-based detection ──
-    const intent = await detectTemporalIntent(message, new Date(), apiKey, userTimezone, agentReply);
-
-    if (!intent || !intent.triggerAt) {
-      return NextResponse.json({ detected: false }, { status: 200 });
-    }
-
-    // ── Step 3: Selective triggering filter ──
-    // Skip low-confidence, low-weight, or far-future events
-    const triggerDate = new Date(intent.triggerAt);
-    const daysFuture = (triggerDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24);
-
-    if (intent.context.emotionalWeight === "low" && daysFuture > 7) {
-      console.log("[HER Temporal] Skipping low-weight far-future event");
-      return NextResponse.json({ detected: false, reason: "low-weight-far-future" });
-    }
-    if (daysFuture > 30) {
-      console.log("[HER Temporal] Skipping event >30 days out");
-      return NextResponse.json({ detected: false, reason: "too-far-future" });
-    }
-
-    // ── Step 4: Persist scheduled event (with humanized timing) ──
-    const eventId = await createScheduledEvent({
-      userId: auth.userId,
-      conversationId: conversationId || null,
-      intent,
-      originalMessage: message,
-      applyVariance: true,
-    });
-
-    console.log(
-      `[HER Temporal] ${intent.type} detected for user ${auth.userId}: "${intent.context.summary}" → ${intent.triggerAt}`
-    );
-
-    return NextResponse.json({
-      detected: true,
-      type: intent.type,
-      triggerAt: intent.triggerAt,
-      summary: intent.context.summary,
-      eventId,
-    });
+    return NextResponse.json({ detected: false }, { status: 200 });
   } catch (err) {
     console.error("[HER Temporal] Error:", err);
     return NextResponse.json({ detected: false }, { status: 200 });
