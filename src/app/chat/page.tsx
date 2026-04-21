@@ -309,9 +309,9 @@ export default function ChatPage() {
   // Session key — increments on session switch to trigger fade animation
   const [sessionKey, setSessionKey] = useState(0);
 
-  // Scroll trigger — increments during streaming to keep auto-scroll working
-  const [scrollTrigger, setScrollTrigger] = useState(0);
-  // Force-scroll trigger — unconditional scroll on new messages (user send, HER reply)
+  // Force-scroll trigger — unconditional scroll on new messages (user send, HER reply).
+  // Streaming auto-scroll is handled internally by ChatWindow via virtuoso's
+  // followOutput, so we no longer fire a per-token scroll signal from here.
   const [forceScrollTrigger, setForceScrollTrigger] = useState(0);
 
   // ── Image Studio state ──
@@ -1067,8 +1067,8 @@ export default function ChatPage() {
             m.id === herMessageId ? { ...m, content: textSoFar } : m
           )
         );
-        // Trigger scroll to keep up with growing text
-        setScrollTrigger((n) => n + 1);
+        // Streaming auto-scroll is owned by virtuoso's followOutput now —
+        // no manual scroll signal needed per token.
       }
 
       // ── Stream complete — finalize ──
@@ -1566,7 +1566,6 @@ export default function ChatPage() {
         items={messages}
         itemKey={(m) => m.id}
         firstItemIndex={INITIAL_TOP_INDEX - prependedCount}
-        scrollTrigger={scrollTrigger}
         forceScrollTrigger={forceScrollTrigger}
         onScrollNearTop={hasMoreMessages && !loadingOlder ? handleLoadOlder : undefined}
         renderItem={(msg, i) => {

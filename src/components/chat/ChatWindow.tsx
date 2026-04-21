@@ -41,8 +41,6 @@ interface ChatWindowProps<T> {
   footer?: React.ReactNode;
   /** Increment to force an unconditional scroll-to-bottom (sent message, switched conversation). */
   forceScrollTrigger?: number;
-  /** Increment during streaming to keep the bottom pinned if the user is near the bottom. */
-  scrollTrigger?: number;
 }
 
 /**
@@ -61,12 +59,9 @@ export default function ChatWindow<T>({
   header,
   footer,
   forceScrollTrigger,
-  scrollTrigger,
 }: ChatWindowProps<T>) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
-  /** Whether the user is currently near the bottom of the list. */
-  const atBottomRef = useRef(true);
-  /** Throttle: don't fire onScrollNearTop more than once per 800ms. */
+  /** Throttle: don't fire onScrollNearTop more than once per 250ms. */
   const lastTopFireRef = useRef<number>(0);
 
   // ── Force scroll on demand (sent message, switched conversation) ──
@@ -82,13 +77,12 @@ export default function ChatWindow<T>({
   }, [forceScrollTrigger]);
 
   // ── Streaming auto-scroll ──
-  // We intentionally do NOT manually scroll here on every streaming token.
-  // Virtuoso's `followOutput="smooth"` (set below) handles this correctly:
+  // Owned by virtuoso's `followOutput="smooth"` (set on the component below):
   //   - if the user is at the bottom when content grows, it follows;
-  //   - if the user has scrolled away (even by a bit), it does NOT yank them.
-  // Manually calling scrollToIndex on every token caused the "yanks me back
-  // up the moment I scroll down to peek at her reply" bug.
-  void scrollTrigger;
+  //   - if the user has scrolled away (even slightly), it does NOT yank them.
+  // We deliberately do not call scrollToIndex on every streaming token — that
+  // fought with the user's intent and would yank them back up the moment they
+  // scrolled down to peek at the growing reply.
 
   // ── Top-reached handler with light throttle ──
   // Parent already guards re-entry via its own `loadingOlder` flag, so this
@@ -101,11 +95,6 @@ export default function ChatWindow<T>({
     lastTopFireRef.current = now;
     onScrollNearTop();
   }, [onScrollNearTop]);
-
-  // ── Track near-bottom state for streaming auto-scroll ──
-  const handleAtBottomChange = useCallback((bottom: boolean) => {
-    atBottomRef.current = bottom;
-  }, []);
 
   /**
    * Clear text selection when tapping on whitespace / non-text areas.
@@ -179,7 +168,6 @@ export default function ChatWindow<T>({
         firstItemIndex={firstItemIndex}
         initialTopMostItemIndex={Math.max(items.length - 1, 0)}
         followOutput="smooth"
-        atBottomStateChange={handleAtBottomChange}
         atBottomThreshold={50}
         startReached={handleStartReached}
         itemContent={renderItemWrapped}
