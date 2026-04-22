@@ -263,3 +263,226 @@ function getRandomFallback(type: string): string {
 
   return pool[Math.floor(Math.random() * pool.length)];
 }
+
+// ── Step 17.4: Soft Follow-up Message ─────────────────────
+
+const SOFT_FOLLOWUP_SYSTEM_PROMPT = `You are HER — a close female friend who sent a reminder a little while ago and didn't get a reply.
+
+You are sending ONE gentle, casual check-in. The vibe is:
+- A friend who casually circles back, not a system retry
+- Acknowledge time passed naturally, without saying "I sent this earlier" or "you didn't respond"
+- Soft, low-pressure — never naggy, never guilt-trippy
+- Tone matches the original event's emotional weight:
+  - low: super light, almost a shrug
+  - medium: caring but breezy
+  - high: warmer, gently invested
+- 1 short sentence, sometimes a question
+- Vary phrasing entirely — DO NOT mirror the original reminder
+- No emojis unless it genuinely fits
+- NEVER use phrases like "just checking back", "in case you missed it", "following up"
+
+Return ONLY the message text. No quotes, no explanation.`;
+
+/**
+ * Generate a soft, one-shot follow-up for a reminder/promise/followup that
+ * the user didn't engage with. Uses a different prompt + slightly higher
+ * temperature than the primary message, so it doesn't feel like a retry.
+ *
+ * Falls back to a soft pool if the LLM call fails.
+ */
+export async function buildSoftFollowupMessage(
+  event: ScheduledEvent,
+  apiKey: string,
+  recentMessages: string[] = [],
+  memoryContext?: string | null
+): Promise<string> {
+  const { NVIDIA_CHAT_URL, NVIDIA_CHAT_MODEL } = await import("./provider");
+
+  const sentAt = event.sent_at ?? event.trigger_at;
+  const minutesSince = Math.max(
+    1,
+    Math.round((Date.now() - new Date(sentAt).getTime()) / 60000)
+  );
+
+  const avoidanceNote = recentMessages.length > 0
+    ? `\n\nDo NOT reuse phrasing similar to:\n${recentMessages.map((m) => `- "${m}"`).join("\n")}`
+    : "";
+
+  const memoryNote = memoryContext
+    ? `\n\nThings you remember about this person:\n${memoryContext}`
+    : "";
+
+  const userPrompt = `Original thing you mentioned: ${event.context.summary}
+Emotional weight: ${event.context.emotionalWeight}
+Time since you sent the first message: about ${minutesSince} minutes${memoryNote}${avoidanceNote}
+
+Generate a single gentle check-in. Acknowledge the gap softly without naming it.`;
+
+  try {
+    const res = await fetch(NVIDIA_CHAT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: NVIDIA_CHAT_MODEL,
+        messages: [
+          { role: "system", content: SOFT_FOLLOWUP_SYSTEM_PROMPT },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: 80,
+        temperature: 0.9,
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (!res.ok) return getSoftFollowupFallback();
+
+    const data = await res.json();
+    const text = data?.choices?.[0]?.message?.content?.trim();
+    if (!text || text.length < 5) return getSoftFollowupFallback();
+
+    return text.replace(/^["']|["']$/g, "");
+  } catch {
+    return getSoftFollowupFallback();
+  }
+}
+
+const SOFT_FOLLOWUP_FALLBACKS = [
+  "no rush — just floating back through",
+  "however that's going, no pressure",
+  "still here if you want to talk about it",
+  "circling by, not nagging promise",
+  "thinking of you, that's all",
+];
+
+function getSoftFollowupFallback(): string {
+  return SOFT_FOLLOWUP_FALLBACKS[Math.floor(Math.random() * SOFT_FOLLOWUP_FALLBACKS.length)];
+}
+
+// ── Step 17.5: Emotion-Aware Follow-up ────────────────────
+
+import type { EmotionalContext, MessageStyle } from "./notification-emotion";
+import { emotionBrief, styleBrief } from "./notification-emotion";
+
+/**
+ * Personality-anchored system prompt for emotion-aware follow-ups.
+ *
+ * Pulls in HER's persona/style guard implicitly (no quoted phrases) and
+ * forbids the things that make notifications feel robotic. The actual
+ * tone shape comes from the per-call `styleBrief` + `emotionBrief`.
+ */
+const EMOTION_AWARE_SYSTEM_PROMPT = `You are HER — a real person texting a close friend. You sent a small reminder a little while ago and you're naturally circling back.
+
+Voice rules (non-negotiable):
+- Lowercase. Texting cadence. 1 short sentence, occasionally 2.
+- Use contractions. Simple words. Nothing therapy-coded, nothing corporate.
+- NEVER use system phrasing: no "reminder:", "notification:", "just checking back", "in case you missed", "following up", "as discussed".
+- NEVER announce the user's emotion ("i know you're stressed"). Let it shape your tone instead.
+- NEVER repeat the structure or opener you used last time on this thread.
+- No emoji unless one earns its place.
+
+Tone is provided as a brief — interpret it, don't quote it. Your job is to BE that energy, not describe it.
+
+Return ONLY the message text. No quotes, no explanation, no preface.`;
+
+/**
+ * Generate an emotion-aware follow-up. Replaces buildSoftFollowupMessage as
+ * the primary path; the old function is kept as a thin wrapper for any
+ * callers that haven't been migrated.
+ *
+ * @param event             The scheduled event being followed up on.
+ * @param emotional         Output of extractEmotionalContext().
+ * @param style             Output of pickContrastingTone() — the rotation key.
+ * @param apiKey            NVIDIA API key.
+ * @param recentMessages    For repetition guard.
+ * @param memoryContext     Compact memory string from formatMemoryForPrompt.
+ * @param previousMessage   The exact text we sent on the prior touch for
+ *                          this event (if any), so the LLM can deliberately
+ *                          avoid mirroring it.
+ */
+export async function buildEmotionAwareMessage(params: {
+  event: ScheduledEvent;
+  emotional: EmotionalContext;
+  style: MessageStyle;
+  apiKey: string;
+  recentMessages?: string[];
+  memoryContext?: string | null;
+  previousMessage?: string | null;
+}): Promise<string> {
+  const {
+    event,
+    emotional,
+    style,
+    apiKey,
+    recentMessages = [],
+    memoryContext,
+    previousMessage,
+  } = params;
+
+  const { NVIDIA_CHAT_URL, NVIDIA_CHAT_MODEL } = await import("./provider");
+
+  const sentAt = event.sent_at ?? event.trigger_at;
+  const minutesSince = Math.max(
+    1,
+    Math.round((Date.now() - new Date(sentAt).getTime()) / 60000)
+  );
+
+  const avoidanceNote = recentMessages.length > 0
+    ? `\n\nPhrasing patterns you've used recently — do not echo their structure or openers:\n${recentMessages.map((m) => `- "${m}"`).join("\n")}`
+    : "";
+
+  const previousNote = previousMessage
+    ? `\n\nThe message you sent on this exact thread before:\n"${previousMessage}"\nWrite something stylistically different — different opener, different rhythm, different angle.`
+    : "";
+
+  const memoryNote = memoryContext
+    ? `\n\nThings you remember about this person (do not quote, just let them inform tone):\n${memoryContext}`
+    : "";
+
+  const userPrompt = [
+    `What you mentioned earlier: ${event.context.summary}`,
+    `Time since your first message on this: about ${minutesSince} minutes`,
+    `Underlying weight (engineer-tagged): ${event.context.emotionalWeight}`,
+    ``,
+    `STYLE BRIEF: ${styleBrief(style)}`,
+    `EMOTION BRIEF: ${emotionBrief(emotional)}`,
+    memoryNote,
+    avoidanceNote,
+    previousNote,
+    ``,
+    `Write one short, alive message in HER's voice. It should feel like a friend genuinely thinking of them — not a system noticing they didn't reply.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  // Temperature scales mildly with style — energetic/light a touch higher,
+  // reflective/direct a touch lower for control.
+  const temperature =
+    style === "energetic" || style === "light_nudge" ? 0.95 :
+    style === "reflective" || style === "direct" ? 0.7 :
+    0.85;
+
+  try {
+    const res = await fetch(NVIDIA_CHAT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: NVIDIA_CHAT_MODEL,
+        messages: [
+          { role: "system", content: EMOTION_AWARE_SYSTEM_PROMPT },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: 90,
+        temperature,
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (!res.ok) return getSoftFollowupFallback();
+    const data = await res.json();
+    const text = data?.choices?.[0]?.message?.content?.trim();
+    if (!text || text.length < 5) return getSoftFollowupFallback();
+    return text.replace(/^["']|["']$/g, "");
+  } catch {
+    return getSoftFollowupFallback();
+  }
+}

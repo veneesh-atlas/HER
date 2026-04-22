@@ -30,3 +30,66 @@ export function debug(...args: unknown[]): void {
 export function debugWarn(...args: unknown[]): void {
   if (isDev) console.warn(...args);
 }
+
+// ── Step 17.X+2: Ghost Debug Mode ─────────────────────────
+//
+// Standardised, greppable lifecycle log format:
+//
+//     [HER][<layer>][event:<shortId>] message  { ...meta }
+//
+// Designed to be tracked by a single `eventId` from intent → delivery →
+// follow-up using nothing more than `grep "event:7e5b"` over server logs.
+// All log levels (info / warn / error) are emitted in BOTH dev and prod
+// because these are operational signal — never user content.
+
+export type HERLayer =
+  | "Temporal"
+  | "Events"
+  | "Cron"
+  | "Emotion"
+  | "Push"
+  | "DevTest";
+
+/** First 8 chars of a UUID — long enough to be unique in practice, short
+ *  enough to scan. Falls back to "unknown" for null/undefined. */
+export function shortId(eventId: string | null | undefined): string {
+  if (!eventId) return "unknown";
+  return eventId.replace(/-/g, "").slice(0, 8);
+}
+
+function fmt(layer: HERLayer, eventId: string | null | undefined, message: string): string {
+  return `[HER][${layer}][event:${shortId(eventId)}] ${message}`;
+}
+
+/** Standard info — always logged. Use for lifecycle milestones. */
+export function logHER(
+  layer: HERLayer,
+  eventId: string | null | undefined,
+  message: string,
+  meta?: Record<string, unknown>
+): void {
+  if (meta) console.log(fmt(layer, eventId, message), meta);
+  else console.log(fmt(layer, eventId, message));
+}
+
+/** Warning — always logged. Use for soft failures + skipped deliveries. */
+export function warnHER(
+  layer: HERLayer,
+  eventId: string | null | undefined,
+  message: string,
+  meta?: Record<string, unknown>
+): void {
+  if (meta) console.warn(fmt(layer, eventId, message), meta);
+  else console.warn(fmt(layer, eventId, message));
+}
+
+/** Error — always logged. Use for hard failures (DB inserts, push, LLM). */
+export function errorHER(
+  layer: HERLayer,
+  eventId: string | null | undefined,
+  message: string,
+  meta?: Record<string, unknown>
+): void {
+  if (meta) console.error(fmt(layer, eventId, message), meta);
+  else console.error(fmt(layer, eventId, message));
+}

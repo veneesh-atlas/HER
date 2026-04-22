@@ -460,3 +460,129 @@ What's the status?`;
     return { status: "ignore" };
   }
 }
+
+// ── Step 17.4: Postponement Detection ──────────────────────
+
+export interface PostponementResult {
+  /** True if the user is postponing a recently-sent reminder. */
+  shouldReschedule: boolean;
+  /** ISO timestamp for the new fire time, or null if uncertain. */
+  newTriggerAt: string | null;
+  /** Short LLM-inferred reason ("user said 'in a bit'", "moved to evening"). */
+  reason: string;
+  /** 0–1 confidence; we only act on >= 0.6. */
+  confidence: number;
+}
+
+const POSTPONEMENT_SYSTEM_PROMPT = `You analyze a user's reply to a reminder HER just sent to determine if they're postponing it.
+
+You are given:
+1. The reminder HER just sent (summary)
+2. The user's reply
+3. The current time + timezone
+
+Examples of postponement:
+- "I'll do it later" → ~+2 hours
+- "not now" → ~+1 hour
+- "in a bit" → ~+30 min
+- "tonight" → user's local 8–9pm
+- "tomorrow" → next day, similar time
+- "after lunch" → user's local ~2pm
+- "in 20 minutes" → +20 min exactly
+
+NOT postponement (return shouldReschedule:false):
+- "ok thanks" (acknowledged but ambiguous)
+- "done" (completed, not postponed)
+- "no" alone (ambiguous)
+- unrelated topic
+- positive engagement without time language
+
+Return ONLY valid JSON:
+{
+  "shouldReschedule": true | false,
+  "newTriggerAt": "ISO 8601 UTC timestamp or null",
+  "reason": "short human phrase explaining the inferred new time",
+  "confidence": 0.0 to 1.0
+}
+
+Rules:
+- If unsure → shouldReschedule:false
+- newTriggerAt MUST be in the future
+- Resolve relative times in the user's local timezone, then convert to UTC
+- confidence < 0.6 → not worth acting on`;
+
+/**
+ * Given a user message that may be postponing the most-recent sent reminder,
+ * infer a new trigger time. Returns shouldReschedule:false when the message
+ * doesn't look like a postponement.
+ */
+export async function detectPostponement(
+  message: string,
+  eventSummary: string,
+  now: Date,
+  apiKey: string,
+  userTimezone?: string
+): Promise<PostponementResult> {
+  const NEGATIVE: PostponementResult = {
+    shouldReschedule: false,
+    newTriggerAt: null,
+    reason: "",
+    confidence: 0,
+  };
+
+  const { NVIDIA_CHAT_URL, NVIDIA_CHAT_MODEL } = await import("./provider");
+  const { formatLocalTimeView, buildTemporalTimeHeader } = await import("./timezone");
+  const timeHeader = buildTemporalTimeHeader(formatLocalTimeView(now, userTimezone));
+
+  const userPrompt = `${timeHeader}
+
+Reminder HER just sent: "${eventSummary}"
+
+User's reply:
+"${message}"
+
+Is this a postponement? If yes, when do they want it instead?`;
+
+  try {
+    const res = await fetch(NVIDIA_CHAT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: NVIDIA_CHAT_MODEL,
+        messages: [
+          { role: "system", content: POSTPONEMENT_SYSTEM_PROMPT },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: 160,
+        temperature: 0.1,
+      }),
+      signal: AbortSignal.timeout(8_000),
+    });
+
+    if (!res.ok) return NEGATIVE;
+
+    const data = await res.json();
+    const raw = data?.choices?.[0]?.message?.content?.trim();
+    if (!raw) return NEGATIVE;
+
+    const jsonStr = raw.replace(/^```json?\s*/, "").replace(/\s*```$/, "");
+    const parsed = JSON.parse(jsonStr) as PostponementResult;
+
+    if (!parsed?.shouldReschedule) return NEGATIVE;
+    if ((parsed.confidence ?? 0) < 0.6) return NEGATIVE;
+    if (!parsed.newTriggerAt) return NEGATIVE;
+
+    // Validate: must be in the future
+    const newDate = new Date(parsed.newTriggerAt);
+    if (isNaN(newDate.getTime()) || newDate.getTime() <= now.getTime()) return NEGATIVE;
+
+    return {
+      shouldReschedule: true,
+      newTriggerAt: parsed.newTriggerAt,
+      reason: parsed.reason || "user-requested postponement",
+      confidence: parsed.confidence,
+    };
+  } catch {
+    return NEGATIVE;
+  }
+}

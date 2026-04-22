@@ -18,8 +18,18 @@ import {
   detectEventResolution,
   detectFollowUpIntent,
   detectContinuityUpdate,
+  detectPostponement,
 } from "@/lib/temporal";
-import { createScheduledEvent, getPendingEventsForUser, cancelEvent } from "@/lib/scheduled-events";
+import {
+  createScheduledEvent,
+  getPendingEventsForUser,
+  cancelEvent,
+  markEventCompleted,
+  rescheduleEvent,
+  getRecentSentEventForUser,
+} from "@/lib/scheduled-events";
+import { saveNotificationSettings } from "@/lib/notification-settings";
+import { saveMemoryEntries } from "@/lib/memory";
 import { debug } from "@/lib/debug";
 
 export async function POST(req: NextRequest) {
@@ -35,6 +45,17 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { message, conversationId, recentContext, userTimezone, agentReply } = body;
 
+    // ── Persist user timezone EARLY (Part C) ──
+    // Many users never open the Notifications panel, so their
+    // notification_settings row never gets created and getNotificationSettings()
+    // falls back to timezone:"UTC". That default makes the cron's quiet-hours
+    // check apply IST 9:45 AM → 04:15 UTC → inside the 01:00–05:00 window →
+    // reminders silently delayed. Save the browser-detected TZ on first
+    // contact so the cron always has correct local time.
+    if (userTimezone && typeof userTimezone === "string") {
+      saveNotificationSettings(auth.userId, { timezone: userTimezone }).catch(() => {});
+    }
+
     if (!message || typeof message !== "string") {
       return NextResponse.json({ detected: false }, { status: 200 });
     }
@@ -42,6 +63,39 @@ export async function POST(req: NextRequest) {
     const apiKey = process.env.NVIDIA_CHAT_API_KEY;
     if (!apiKey) {
       return NextResponse.json({ detected: false }, { status: 200 });
+    }
+
+    // ── Step 17.4: Postponement on a recently-sent reminder ──
+    // If HER just sent a reminder/promise and the user replies with "in a bit",
+    // "later", "tonight" etc., reschedule the existing event into a new one
+    // and link them. Runs before the resolution + intent detectors so a
+    // postponement doesn't get re-classified as a brand-new reminder.
+    const recentSent = await getRecentSentEventForUser(auth.userId);
+    if (recentSent) {
+      const postpone = await detectPostponement(
+        message,
+        recentSent.context.summary,
+        new Date(),
+        apiKey,
+        userTimezone
+      );
+      if (postpone.shouldReschedule && postpone.newTriggerAt) {
+        const newId = await rescheduleEvent({
+          originalEvent: recentSent,
+          newTriggerAt: postpone.newTriggerAt,
+          reason: postpone.reason,
+        });
+        if (newId) {
+          return NextResponse.json({
+            detected: true,
+            type: "reschedule",
+            triggerAt: postpone.newTriggerAt,
+            originalEventId: recentSent.id,
+            eventId: newId,
+            reason: postpone.reason,
+          });
+        }
+      }
     }
 
     // ── Event Resolution: check if this message resolves pending events ──
@@ -58,7 +112,27 @@ export async function POST(req: NextRequest) {
         if (resolved.includes(event.id)) continue; // Already resolved
         const update = await detectContinuityUpdate(message, event.context.summary, new Date(), apiKey, userTimezone);
         if (update.status === "completed") {
-          await cancelEvent(event.id);
+          // Step 17.4: explicit completed state + light memory write for
+          // events that genuinely mattered (medium/high weight). Low-weight
+          // tasks aren't worth filling memory with.
+          await markEventCompleted(event.id);
+          if (event.context.emotionalWeight !== "low") {
+            // Step 17.5 Part E: store an emotional outcome signal so future
+            // events of the same category can adapt tone (e.g. if user was
+            // anxious during prior "interview" events, future interview
+            // reminders trend calmer).
+            const lowerMsg = message.toLowerCase();
+            const stressedHit = /stress|nervous|anxious|panick|overwhelm|exhausted|drain/.test(lowerMsg);
+            const positiveHit = /great|awesome|amazing|love|perfect|finally|nailed|crushed|smooth/.test(lowerMsg);
+            const outcome = stressedHit ? "stressed" : positiveHit ? "positive" : "neutral";
+            saveMemoryEntries(auth.userId, [
+              {
+                fact: `they followed through on: ${event.context.summary} (outcome: ${outcome}, category: ${event.context.category})`,
+                category: outcome === "stressed" ? "emotional" : "context",
+                confidence: 0.7,
+              },
+            ]).catch(() => {});
+          }
           debug(`[HER Temporal] Continuity: event ${event.id} completed`);
         } else if (update.status === "reschedule" && update.newTime) {
           await cancelEvent(event.id);
@@ -91,6 +165,16 @@ export async function POST(req: NextRequest) {
       // This runs BEFORE the predictive follow-up so explicit promises don't
       // get misclassified as generic followups.
       const intent = await detectTemporalIntent(message, new Date(), apiKey, userTimezone, agentReply);
+
+      console.log("[HER Temporal] LLM intent:", JSON.stringify({
+        userId: auth.userId,
+        message: message.slice(0, 120),
+        userTimezone,
+        type: intent?.type,
+        triggerAt: intent?.triggerAt,
+        hasTriggerAt: !!intent?.triggerAt,
+        summary: intent?.context?.summary,
+      }));
 
       if (intent && intent.triggerAt) {
         // ── Step 3: Selective triggering filter ──

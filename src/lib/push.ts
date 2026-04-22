@@ -68,16 +68,18 @@ export async function sendPushNotification(
 
     return true;
   } catch (err: unknown) {
-    const error = err as { statusCode?: number; code?: string };
+    const error = err as { statusCode?: number; code?: string; body?: string };
     if (error.code === "MODULE_NOT_FOUND") {
       console.warn("[HER Push] web-push not installed — skipping. Run: npm install web-push");
       return false;
     }
-    if (error.statusCode === 410) {
-      console.warn("[HER Push] Subscription expired (410 Gone)");
-    } else {
-      console.warn("[HER Push] Send failed:", err);
-    }
+    console.error("[HER Push] sendNotification failed", {
+      statusCode: error.statusCode,
+      code: error.code,
+      body: error.body,
+      endpoint: subscription.endpoint?.slice(0, 60),
+      expired: error.statusCode === 410,
+    });
     return false;
   }
 }

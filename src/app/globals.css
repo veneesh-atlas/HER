@@ -430,6 +430,13 @@ input[type="text"] {
   overscroll-behavior-y: contain;
 }
 
+/* Subtle fade at the very top of the scroll area so messages slide in
+   gently behind the header instead of clipping with a hard line. */
+.chat-mask-top {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 20px);
+  mask-image: linear-gradient(to bottom, transparent, black 20px);
+}
+
 /* ── Message Safety ───────────────────────────────────── */
 
 .message-content {

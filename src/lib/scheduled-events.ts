@@ -12,12 +12,18 @@
 
 import { getSupabaseClient } from "./supabase-client";
 import type { TemporalIntent } from "./temporal";
-import { debug } from "./debug";
+import { debug, logHER, warnHER, errorHER } from "./debug";
 
 // ── Types ──────────────────────────────────────────────────
 
 export type ScheduledEventType = "reminder" | "followup" | "nudge" | "promise";
-export type ScheduledEventStatus = "pending" | "sent" | "cancelled";
+export type ScheduledEventStatus =
+  | "pending"
+  | "sent"
+  | "cancelled"
+  | "missed"
+  | "completed"
+  | "rescheduled";
 
 export interface ScheduledEvent {
   id: string;
@@ -40,6 +46,14 @@ export interface ScheduledEvent {
   };
   status: ScheduledEventStatus;
   created_at: string;
+  // ── Step 17.4 lifecycle columns ──
+  sent_at?: string | null;
+  missed_at?: string | null;
+  completed_at?: string | null;
+  rescheduled_at?: string | null;
+  followup_sent_at?: string | null;
+  rescheduled_from_event_id?: string | null;
+  reschedule_reason?: string | null;
 }
 
 // ── Timing Variance (Part B — Humanized Timing) ───────────
@@ -47,8 +61,11 @@ export interface ScheduledEvent {
 /**
  * Apply natural delivery variance so notifications never fire
  * exactly on the minute. Makes HER feel human, not robotic.
+ *
+ * Exported for unit testing — production callers should go through
+ * `createScheduledEvent({ applyVariance: true })`.
  */
-function applyTimingVariance(triggerAt: string, type: string): string {
+export function applyTimingVariance(triggerAt: string, type: string): string {
   const trigger = new Date(triggerAt);
   let offsetMs: number;
 
@@ -104,6 +121,14 @@ export async function createScheduledEvent(params: {
   const client = getSupabaseClient();
   if (!client) return null;
 
+  // Defense in depth: never schedule background work for guests.
+  // The temporal route already gates this, but enforce here too so any
+  // caller (cron, dev harness, future tools) can't accidentally bypass.
+  if (!params.userId || params.userId === "guest") {
+    debug("[HER Events] Guest user — skipping scheduled event");
+    return null;
+  }
+
   // If no trigger time, skip — we can't schedule without a when
   if (!params.intent.triggerAt) {
     console.warn("[HER Events] No triggerAt — skipping event creation");
@@ -114,31 +139,48 @@ export async function createScheduledEvent(params: {
     ? applyTimingVariance(params.intent.triggerAt, params.intent.type)
     : params.intent.triggerAt;
 
+  const insertPayload = {
+    user_id: params.userId,
+    conversation_id: params.conversationId,
+    type: params.intent.type,
+    trigger_at: finalTriggerAt,
+    context: {
+      ...params.intent.context,
+      originalMessage: params.originalMessage.slice(0, 500),
+      source: params.intent.type, // Context tag for continuity (Part F)
+    },
+    status: "pending" as ScheduledEventStatus,
+  };
+
+  debug("[HER Events] INSERT payload:", JSON.stringify(insertPayload));
+
   try {
     const { data, error } = await client
       .from("scheduled_events")
-      .insert({
-        user_id: params.userId,
-        conversation_id: params.conversationId,
-        type: params.intent.type,
-        trigger_at: finalTriggerAt,
-        context: {
-          ...params.intent.context,
-          originalMessage: params.originalMessage.slice(0, 500),
-          source: params.intent.type, // Context tag for continuity (Part F)
-        },
-        status: "pending" as ScheduledEventStatus,
-      })
+      .insert(insertPayload)
       .select("id")
       .single();
 
     if (error) {
-      console.warn("[HER Events] Create failed:", error.message);
+      // Loud error — surfaces CHECK-constraint failures (e.g. missing
+      // 'promise' value in the schema's type CHECK) which previously
+      // disappeared into a single warn line.
+      const pgErr = error as { code?: string; details?: string; hint?: string; message: string };
+      errorHER("Events", null, "INSERT FAILED", {
+        code: pgErr.code,
+        details: pgErr.details,
+        hint: pgErr.hint,
+        message: pgErr.message,
+        type: params.intent.type,
+      });
       return null;
     }
 
-    debug("[HER Events] Created:", data.id, params.intent.context.summary,
-      params.applyVariance ? `(variance applied: ${finalTriggerAt})` : "");
+    logHER("Events", data.id as string, "INSERT OK", {
+      trigger_at: finalTriggerAt,
+      type: params.intent.type,
+      weight: params.intent.context.emotionalWeight,
+    });
 
     // ── Pre-emptive reminder for high-weight events (Part I) ──
     if (
@@ -248,6 +290,9 @@ export async function hasPendingEventSoon(
 
 /**
  * Mark an event as sent after delivering the notification.
+ * Also writes `sent_at` so the missed-detection pass can compare against
+ * the real delivery time (not the planned trigger_at, which can drift
+ * with timing variance).
  */
 export async function markEventSent(eventId: string): Promise<void> {
   const client = getSupabaseClient();
@@ -256,7 +301,10 @@ export async function markEventSent(eventId: string): Promise<void> {
   try {
     const { error } = await client
       .from("scheduled_events")
-      .update({ status: "sent" as ScheduledEventStatus })
+      .update({
+        status: "sent" as ScheduledEventStatus,
+        sent_at: new Date().toISOString(),
+      })
       .eq("id", eventId);
 
     if (error) console.warn("[HER Events] Mark sent failed:", error.message);
@@ -445,16 +493,17 @@ export async function canSendNotification(userId: string): Promise<boolean> {
   try {
     const { data } = await client
       .from("scheduled_events")
-      .select("trigger_at")
+      .select("sent_at, trigger_at")
       .eq("user_id", userId)
       .eq("status", "sent")
-      .order("trigger_at", { ascending: false })
+      .order("sent_at", { ascending: false, nullsFirst: false })
       .limit(1)
       .single();
 
     if (!data) return true;
 
-    const lastSent = new Date(data.trigger_at).getTime();
+    // Prefer real send time; fall back to trigger_at for legacy rows
+    const lastSent = new Date(data.sent_at ?? data.trigger_at).getTime();
     return Date.now() - lastSent >= MIN_NOTIFICATION_GAP_MS;
   } catch {
     return true;
@@ -501,7 +550,9 @@ export async function getRecentNotificationMessages(
  */
 export async function storeNotificationMessage(
   eventId: string,
-  message: string
+  message: string,
+  /** Optional Step 17.5 metadata: which style we chose this round. */
+  style?: string | null
 ): Promise<void> {
   const client = getSupabaseClient();
   if (!client) return;
@@ -515,10 +566,11 @@ export async function storeNotificationMessage(
       .single();
 
     if (event) {
-      const updatedContext = {
+      const updatedContext: Record<string, unknown> = {
         ...(event.context as Record<string, unknown>),
         lastSentMessage: message,
       };
+      if (style) updatedContext.lastStyle = style;
       await client
         .from("scheduled_events")
         .update({ context: updatedContext })
@@ -611,6 +663,334 @@ export async function getDropoffContext(userId: string): Promise<{
   }
 }
 
+// ── Step 17.4: Self-Healing Lifecycle ─────────────────────
+
+/** A "missed" reminder is one we sent but the user never engaged with. */
+const MISSED_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
+
+/**
+ * Pure helper: given an event and "now", decide if it should be considered
+ * missed. The actual "did the user reply?" check is done separately via
+ * `userRepliedSince` so this stays trivially testable.
+ */
+export function detectMissedEvent(
+  event: Pick<ScheduledEvent, "sent_at" | "trigger_at" | "status" | "followup_sent_at">,
+  now: Date = new Date(),
+  thresholdMs: number = MISSED_THRESHOLD_MS
+): boolean {
+  if (event.status !== "sent") return false;
+  if (event.followup_sent_at) return false; // already followed up — never twice
+  const sentAt = new Date(event.sent_at ?? event.trigger_at).getTime();
+  return now.getTime() - sentAt >= thresholdMs;
+}
+
+/**
+ * Mark an event as completed (user resolved it positively).
+ * Used by the resolution detector when a user message implies success.
+ */
+export async function markEventCompleted(eventId: string): Promise<void> {
+  const client = getSupabaseClient();
+  if (!client) return;
+  try {
+    const { error } = await client
+      .from("scheduled_events")
+      .update({
+        status: "completed" as ScheduledEventStatus,
+        completed_at: new Date().toISOString(),
+      })
+      .eq("id", eventId);
+    if (error) warnHER("Events", eventId, "Mark completed failed", { message: error.message });
+    else logHER("Events", eventId, "COMPLETED");
+  } catch (err) {
+    console.warn("[HER Events] Mark completed exception:", err);
+  }
+}
+
+/**
+ * Mark a sent event as missed (no engagement after threshold).
+ * Called by the cron's missed-detection pass after sending the soft follow-up.
+ */
+export async function markEventMissed(eventId: string, deltaMinutes: number): Promise<void> {
+  const client = getSupabaseClient();
+  if (!client) return;
+  try {
+    const { error } = await client
+      .from("scheduled_events")
+      .update({
+        status: "missed" as ScheduledEventStatus,
+        missed_at: new Date().toISOString(),
+      })
+      .eq("id", eventId);
+    if (error) warnHER("Events", eventId, "Mark missed failed", { message: error.message });
+    else logHER("Events", eventId, "MISSED", { deltaMinutes });
+  } catch (err) {
+    console.warn("[HER Events] Mark missed exception:", err);
+  }
+}
+
+/**
+ * Mark an event as rescheduled and create the linked successor event.
+ * Returns the new event id, or null on failure.
+ */
+export async function rescheduleEvent(params: {
+  originalEvent: ScheduledEvent;
+  newTriggerAt: string;
+  reason: string;
+}): Promise<string | null> {
+  const client = getSupabaseClient();
+  if (!client) return null;
+
+  try {
+    // 1. Insert the successor event with provenance
+    const { data: created, error: insertErr } = await client
+      .from("scheduled_events")
+      .insert({
+        user_id: params.originalEvent.user_id,
+        conversation_id: params.originalEvent.conversation_id,
+        type: params.originalEvent.type,
+        trigger_at: params.newTriggerAt,
+        context: {
+          ...params.originalEvent.context,
+          source: "rescheduled",
+        },
+        status: "pending" as ScheduledEventStatus,
+        rescheduled_from_event_id: params.originalEvent.id,
+        reschedule_reason: params.reason.slice(0, 240),
+      })
+      .select("id")
+      .single();
+
+    if (insertErr || !created) {
+      console.error("[HER Events] Reschedule insert failed:", insertErr?.message);
+      return null;
+    }
+
+    // 2. Mark the original as rescheduled (terminal state, won't reprocess)
+    await client
+      .from("scheduled_events")
+      .update({
+        status: "rescheduled" as ScheduledEventStatus,
+        rescheduled_at: new Date().toISOString(),
+      })
+      .eq("id", params.originalEvent.id);
+
+    console.log("[HER Events] RESCHEDULED", {
+      eventId: params.originalEvent.id,
+      newEventId: created.id,
+      newTriggerAt: params.newTriggerAt,
+      reason: params.reason.slice(0, 120),
+    });
+
+    return created.id as string;
+  } catch (err) {
+    console.error("[HER Events] Reschedule exception:", err);
+    return null;
+  }
+}
+
+/** Mark that we've sent the one-shot soft follow-up for this event. */
+export async function markFollowupSent(eventId: string): Promise<void> {
+  const client = getSupabaseClient();
+  if (!client) return;
+  try {
+    await client
+      .from("scheduled_events")
+      .update({ followup_sent_at: new Date().toISOString() })
+      .eq("id", eventId);
+  } catch (err) {
+    console.warn("[HER Events] markFollowupSent exception:", err);
+  }
+}
+
+/**
+ * Fetch sent events that are old enough to be candidates for the
+ * missed-detection pass: still status='sent', no follow-up sent yet,
+ * and at least MISSED_THRESHOLD_MS past their sent_at.
+ *
+ * Excludes nudges (a nudge that gets ignored is the *expected* path —
+ * fatigue handling deals with that, not the soft follow-up).
+ */
+export async function getMissedCandidateEvents(
+  thresholdMs: number = MISSED_THRESHOLD_MS,
+  limit: number = 20
+): Promise<ScheduledEvent[]> {
+  const client = getSupabaseClient();
+  if (!client) return [];
+
+  const cutoff = new Date(Date.now() - thresholdMs).toISOString();
+
+  try {
+    const { data, error } = await client
+      .from("scheduled_events")
+      .select("*")
+      .eq("status", "sent")
+      .is("followup_sent_at", null)
+      .neq("type", "nudge")
+      .lte("sent_at", cutoff)
+      .order("sent_at", { ascending: true })
+      .limit(limit);
+
+    if (error) {
+      console.warn("[HER Events] Missed-candidate query failed:", error.message);
+      return [];
+    }
+    return (data ?? []) as ScheduledEvent[];
+  } catch (err) {
+    console.warn("[HER Events] Missed-candidate exception:", err);
+    return [];
+  }
+}
+
+/**
+ * Did this user post any user-role message in this conversation since `sinceIso`?
+ * Used to decide if a sent event was actually engaged with.
+ */
+export async function userRepliedSince(
+  userId: string,
+  conversationId: string | null,
+  sinceIso: string
+): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client) return false;
+
+  try {
+    let q = client
+      .from("messages")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("role", "user")
+      .gt("created_at", sinceIso);
+    if (conversationId) q = q.eq("conversation_id", conversationId);
+    const { count } = await q;
+    return (count ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Find the most recent sent (and not-yet-followed-up) event for a user
+ * that the user might be replying to with a postponement message.
+ * Window: events sent within the last 90 minutes.
+ */
+export async function getRecentSentEventForUser(
+  userId: string,
+  windowMs: number = 90 * 60 * 1000
+): Promise<ScheduledEvent | null> {
+  const client = getSupabaseClient();
+  if (!client) return null;
+
+  const cutoff = new Date(Date.now() - windowMs).toISOString();
+
+  try {
+    const { data } = await client
+      .from("scheduled_events")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("status", "sent")
+      .is("followup_sent_at", null)
+      .gte("sent_at", cutoff)
+      .order("sent_at", { ascending: false })
+      .limit(1)
+      .single();
+    return (data as ScheduledEvent) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fatigue control: how many low-priority events (nudge/followup) have we
+ * sent to this user in the last 24h that the user did NOT reply to?
+ *
+ * Used by the cron to throttle low-priority delivery — high-priority is
+ * never affected.
+ */
+export async function countIgnoredLowPriority24h(userId: string): Promise<number> {
+  const client = getSupabaseClient();
+  if (!client) return 0;
+
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+  try {
+    const { data } = await client
+      .from("scheduled_events")
+      .select("id, sent_at, conversation_id")
+      .eq("user_id", userId)
+      .in("type", ["nudge", "followup"])
+      .in("status", ["sent", "missed"])
+      .gte("sent_at", since);
+
+    if (!data || data.length === 0) return 0;
+
+    let ignored = 0;
+    for (const ev of data as Array<{ id: string; sent_at: string; conversation_id: string | null }>) {
+      const replied = await userRepliedSince(userId, ev.conversation_id, ev.sent_at);
+      if (!replied) ignored++;
+    }
+    return ignored;
+  } catch {
+    return 0;
+  }
+}
+
+// ── Test / Simulation helper ───────────────────────────────
+
+/**
+ * DEV / TEST ONLY — fast-forward a scheduled event by shifting its
+ * `trigger_at` (and `sent_at` if present) backward in time. Use this
+ * to simulate "this event was scheduled N minutes ago" without waiting
+ * real time.
+ *
+ * @param eventId  Row id in scheduled_events
+ * @param minutes  Shift amount (positive = move INTO the past)
+ */
+export async function shiftEventTime(
+  eventId: string,
+  minutes: number
+): Promise<ScheduledEvent | null> {
+  const client = getSupabaseClient();
+  if (!client) return null;
+
+  const shiftMs = minutes * 60 * 1000;
+
+  try {
+    const { data: existing, error: readErr } = await client
+      .from("scheduled_events")
+      .select("*")
+      .eq("id", eventId)
+      .single();
+    if (readErr || !existing) {
+      console.warn("[HER Events] shiftEventTime: not found", { eventId, err: readErr?.message });
+      return null;
+    }
+
+    const ev = existing as ScheduledEvent;
+    const update: Record<string, string> = {
+      trigger_at: new Date(new Date(ev.trigger_at).getTime() - shiftMs).toISOString(),
+    };
+    if (ev.sent_at) {
+      update.sent_at = new Date(new Date(ev.sent_at).getTime() - shiftMs).toISOString();
+    }
+
+    const { data: updated, error: updErr } = await client
+      .from("scheduled_events")
+      .update(update)
+      .eq("id", eventId)
+      .select("*")
+      .single();
+    if (updErr) {
+      console.warn("[HER Events] shiftEventTime update failed:", updErr.message);
+      return null;
+    }
+    logHER("Events", eventId, "SHIFTED", { minutes, newTriggerAt: update.trigger_at });
+    return updated as ScheduledEvent;
+  } catch (err) {
+    console.warn("[HER Events] shiftEventTime exception:", err);
+    return null;
+  }
+}
+
 // ── SQL for table creation ─────────────────────────────────
 // Run this in your Supabase SQL editor:
 /*
@@ -619,7 +999,7 @@ CREATE TABLE IF NOT EXISTS scheduled_events (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id TEXT NOT NULL,
   conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
-  type TEXT NOT NULL CHECK (type IN ('reminder', 'followup', 'nudge')),
+  type TEXT NOT NULL CHECK (type IN ('reminder', 'followup', 'nudge', 'promise')),
   trigger_at TIMESTAMPTZ NOT NULL,
   context JSONB NOT NULL DEFAULT '{}',
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'cancelled')),

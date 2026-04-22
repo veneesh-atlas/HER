@@ -39,6 +39,16 @@ interface ChatWindowProps<T> {
   footer?: React.ReactNode;
   /** Increment to force an unconditional scroll-to-bottom (sent message, switched conversation). */
   forceScrollTrigger?: number;
+  /**
+   * Anchor messages to the bottom of the scroller when they don't fill it,
+   * so short conversations sit grounded at the bottom (WhatsApp / iMessage
+   * feel) instead of floating at the top with empty space below.
+   *
+   * Set to `false` for the landing/empty state where you want centered or
+   * top-aligned UI to render naturally without being shoved to the bottom.
+   * Default: `true`.
+   */
+  anchorToBottom?: boolean;
 }
 
 /** How close (in px) to the bottom counts as "at bottom" for the streaming pin. */
@@ -54,8 +64,12 @@ export default function ChatWindow<T>({
   header,
   footer,
   forceScrollTrigger,
+  anchorToBottom = true,
 }: ChatWindowProps<T>) {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
+  /** The inner content wrapper. ResizeObserver tracks this so growth from
+   *  streaming tokens / image loads / late-mounting children re-pins us. */
+  const contentRef = useRef<HTMLDivElement | null>(null);
   /** Whether the user is currently within AT_BOTTOM_THRESHOLD of the bottom. */
   const isAtBottomRef = useRef(true);
   /** Throttle: don't fire onScrollNearTop more than once per 250ms. */
@@ -117,16 +131,17 @@ export default function ChatWindow<T>({
   // settle window when async content (images) inflates the document.
   useEffect(() => {
     const node = scrollerRef.current;
-    if (!node || typeof ResizeObserver === "undefined") return;
+    const content = contentRef.current;
+    if (!node || !content || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(() => {
       if (isAtBottomRef.current || Date.now() < settleUntilRef.current) {
         node.scrollTop = node.scrollHeight;
       }
     });
-    // Observe the scroller's first child (the actual content wrapper).
-    // If we observed `node` itself we'd only see clientHeight changes, not
-    // scrollHeight changes.
-    Array.from(node.children).forEach((c) => ro.observe(c));
+    // Observe the inner content wrapper so we react to scrollHeight changes
+    // (streaming tokens, image loads, late mounts) — not just the scroller's
+    // own clientHeight.
+    ro.observe(content);
     return () => ro.disconnect();
   }, []);
 
@@ -188,33 +203,45 @@ export default function ChatWindow<T>({
       ref={scrollerRef}
       onScroll={handleScroll}
       onClick={handleContainerClick}
-      className="chat-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden"
+      className="chat-scroll chat-mask-top min-h-0 flex-1 overflow-y-auto overflow-x-hidden"
       style={{ overscrollBehaviorY: "contain" }}
     >
-      {header ? (
-        <div className="mx-auto w-full max-w-[640px] px-3 pt-3 sm:px-5 sm:pt-6 md:px-6">
-          {header}
-        </div>
-      ) : (
-        <div className="pt-3 sm:pt-6" />
-      )}
+      {/*
+        Bottom-anchor wrapper: `min-h-full` makes the content at least as tall
+        as the scroller; `justify-end` pushes children to the bottom when they
+        don't fill it. Once content overflows, scrolling works normally.
+        The empty/landing state passes `anchorToBottom={false}` so it can
+        center its own UI without being shoved against the input bar.
+      */}
+      <div
+        ref={contentRef}
+        className={`flex flex-col ${anchorToBottom ? "min-h-full justify-end" : ""}`}
+      >
+        {header ? (
+          <div className="mx-auto w-full max-w-[640px] px-3 pt-3 sm:px-5 sm:pt-6 md:px-6">
+            {header}
+          </div>
+        ) : (
+          <div className="pt-3 sm:pt-6" />
+        )}
 
-      {items.map((item, i) => (
-        <div
-          key={itemKey(item)}
-          className="mx-auto w-full max-w-[640px] px-3 sm:px-5 md:px-6"
-        >
-          {renderItem(item, i)}
-        </div>
-      ))}
+        {items.map((item, i) => (
+          <div
+            key={itemKey(item)}
+            className="mx-auto w-full max-w-[640px] px-3 sm:px-5 md:px-6"
+          >
+            {renderItem(item, i)}
+          </div>
+        ))}
 
-      {footer ? (
-        <div className="mx-auto w-full max-w-[640px] px-3 pb-4 sm:px-5 sm:pb-5 md:px-6">
-          {footer}
-        </div>
-      ) : (
-        <div className="pb-4 sm:pb-5" />
-      )}
+        {footer ? (
+          <div className="mx-auto w-full max-w-[640px] px-3 pb-4 sm:px-5 sm:pb-5 md:px-6">
+            {footer}
+          </div>
+        ) : (
+          <div className="pb-4 sm:pb-5" />
+        )}
+      </div>
     </div>
   );
 }

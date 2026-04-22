@@ -106,10 +106,35 @@ export async function savePushSubscription(
 // ── Quiet Hours ────────────────────────────────────────────
 
 /**
+ * Event types that are USER-OWNED (explicitly requested) and must never
+ * be suppressed by quiet hours or cooldowns. The user asked for these at
+ * a specific time — silently delaying them is a bug, not a courtesy.
+ */
+const HIGH_PRIORITY_TYPES = new Set(["reminder", "promise"]);
+
+/**
+ * Returns true if the event is user-owned (high priority) and therefore
+ * MUST bypass quiet hours and cooldown gates.
+ */
+export function isHighPriorityEvent(type: string): boolean {
+  return HIGH_PRIORITY_TYPES.has(type);
+}
+
+/**
  * Check if the current time is within quiet hours for a user.
  * Returns true if notifications should be delayed.
+ *
+ * Short-circuits to `false` when the user has no real timezone set
+ * (default "UTC" placeholder). Otherwise an IST user would silently
+ * fall into the 01:00–05:00 UTC window every morning.
  */
 export function isQuietHours(settings: NotificationSettings): boolean {
+  // No real user TZ → don't apply quiet hours at all. Better to occasionally
+  // over-deliver than to silently swallow a reminder for the user's morning.
+  if (!settings.timezone || settings.timezone === "UTC") {
+    return false;
+  }
+
   const now = getCurrentTimeInTimezone(settings.timezone);
   const currentMinutes = now.hours * 60 + now.minutes;
 

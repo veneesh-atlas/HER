@@ -1557,6 +1557,12 @@ export default function ChatPage() {
         items={messages}
         itemKey={(m) => m.id}
         forceScrollTrigger={forceScrollTrigger}
+        anchorToBottom={
+          // Let EmptyState breathe: only anchor to the bottom once a real
+          // conversation has started. The greeting-only state renders its
+          // own centered UI and shouldn't be shoved against the input.
+          !(messages.length === 1 && messages[0].id === "greeting")
+        }
         onScrollNearTop={hasMoreMessages && !loadingOlder ? handleLoadOlder : undefined}
         renderItem={(msg, i) => {
           const isGeneratedImage = !!msg.image && msg.role === "assistant" && !msg.imageLoading;
