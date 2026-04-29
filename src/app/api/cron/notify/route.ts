@@ -282,6 +282,26 @@ export async function GET(req: NextRequest) {
       const memories = await getUserMemories(event.user_id);
       const memoryContext = formatMemoryForPrompt(memories);
 
+      // Pull the actual recent dialogue so the followup references what was
+      // really being discussed — without this, the LLM only sees the old
+      // engineer-tagged event summary and produces generic "thinking of you"
+      // lines that feel disconnected from the live chat.
+      let lastTurns: { role: string; content: string }[] = [];
+      if (event.conversation_id) {
+        const ctxClient = getSupabaseClient();
+        if (ctxClient) {
+          const { data } = await ctxClient
+            .from("messages")
+            .select("role, content")
+            .eq("conversation_id", event.conversation_id)
+            .order("created_at", { ascending: false })
+            .limit(6);
+          if (data) {
+            lastTurns = (data as { role: string; content: string }[]).reverse();
+          }
+        }
+      }
+
       const messageText = await buildEmotionAwareMessage({
         event,
         emotional,
@@ -290,6 +310,7 @@ export async function GET(req: NextRequest) {
         recentMessages: recent,
         memoryContext,
         previousMessage,
+        lastTurns,
       });
 
       const client = getSupabaseClient();

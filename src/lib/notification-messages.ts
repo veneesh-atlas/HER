@@ -407,6 +407,7 @@ export async function buildEmotionAwareMessage(params: {
   recentMessages?: string[];
   memoryContext?: string | null;
   previousMessage?: string | null;
+  lastTurns?: { role: string; content: string }[];
 }): Promise<string> {
   const {
     event,
@@ -416,6 +417,7 @@ export async function buildEmotionAwareMessage(params: {
     recentMessages = [],
     memoryContext,
     previousMessage,
+    lastTurns = [],
   } = params;
 
   const { NVIDIA_CHAT_URL, NVIDIA_CHAT_MODEL } = await import("./provider");
@@ -438,6 +440,12 @@ export async function buildEmotionAwareMessage(params: {
     ? `\n\nThings you remember about this person (do not quote, just let them inform tone):\n${memoryContext}`
     : "";
 
+  const transcriptNote = lastTurns.length > 0
+    ? `\n\nThe last things actually said in this thread (most recent at the bottom):\n${lastTurns
+        .map((m) => `${m.role === "user" ? "them" : "you"}: ${String(m.content).slice(0, 220)}`)
+        .join("\n")}\n\nYour message must feel like a natural continuation of THIS exchange — pick the thread back up grounded in what was actually being talked about. Do not pivot to a generic check-in.`
+    : "";
+
   const userPrompt = [
     `What you mentioned earlier: ${event.context.summary}`,
     `Time since your first message on this: about ${minutesSince} minutes`,
@@ -445,11 +453,12 @@ export async function buildEmotionAwareMessage(params: {
     ``,
     `STYLE BRIEF: ${styleBrief(style)}`,
     `EMOTION BRIEF: ${emotionBrief(emotional)}`,
+    transcriptNote,
     memoryNote,
     avoidanceNote,
     previousNote,
     ``,
-    `Write one short, alive message in HER's voice. It should feel like a friend genuinely thinking of them — not a system noticing they didn't reply.`,
+    `Write one short, alive message in HER's voice that picks the thread back up — grounded in what was just being talked about, not a generic "thinking of you".`,
   ]
     .filter(Boolean)
     .join("\n");
