@@ -268,8 +268,12 @@ export async function generateImageCore(
         const mimeType = opts.imageMimeType ?? sniffImageMime(safe);
         const assetResult = await uploadNvcfAsset(safe, apiKey, mimeType);
         nvcfAssetId = assetResult.assetId;
-        // NVCF expects: data:<mime>;asset_id,<id>
-        normalizedImage = `data:${mimeType};asset_id,${assetResult.assetId}`;
+        // NVCF expects: data:<mime>;example_id,<id>
+        // (Confirmed by 422 response: "Expected: example_id, got: asset_id".
+        // The asset is still uploaded via the assets API and referenced via
+        // the NVCF-INPUT-ASSET-REFERENCES header — only the data-URL marker
+        // uses `example_id`.)
+        normalizedImage = `data:${mimeType};example_id,${assetResult.assetId}`;
         console.log(`[HER Imagine] NVCF asset uploaded: ${assetResult.assetId} (${mimeType})`);
       } catch (uploadErr) {
         console.error(
