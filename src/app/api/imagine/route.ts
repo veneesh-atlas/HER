@@ -369,7 +369,7 @@ export async function generateImageCore(
   }
 
   console.log(
-    `[HER Imagine] Sending to ${model.label}: ${JSON.stringify(cleanPayload).slice(0, 300)}`
+    `[HER Imagine] Sending to ${model.label}:\n  Headers: ${JSON.stringify({ ...requestHeaders, Authorization: "Bearer ***" })}\n  Payload (image truncated): ${JSON.stringify({ ...cleanPayload, image: typeof cleanPayload.image === "string" ? `${(cleanPayload.image as string).slice(0, 80)}…(${(cleanPayload.image as string).length} chars)` : cleanPayload.image })}`
   );
 
   const res = await fetch(model.endpoint, {
@@ -381,15 +381,25 @@ export async function generateImageCore(
   if (!res.ok) {
     const errBody = await res.text().catch(() => "");
     console.error(
-      `[HER Imagine] NVIDIA error (${model.label}):\n  Status: ${res.status}\n  Body: ${errBody.slice(0, 500)}`
+      `[HER Imagine] NVIDIA error (${model.label}):\n  Status: ${res.status}\n  Body: ${errBody.slice(0, 1000)}`
     );
 
     let detail = "";
     try {
       const parsed = JSON.parse(errBody);
       detail = parsed?.detail || parsed?.error?.message || parsed?.message || "";
-      if (typeof detail === "object") detail = JSON.stringify(detail).slice(0, 200);
+      if (typeof detail === "object") detail = JSON.stringify(detail).slice(0, 400);
     } catch { /* not JSON */ }
+
+    // Fallback: if no structured detail field but the body has text, use it
+    // verbatim (truncated) so the UI never says 'unknown error' when NVIDIA
+    // actually told us something.
+    if (!detail && errBody) {
+      const trimmed = errBody.trim();
+      if (trimmed.length > 0) {
+        detail = trimmed.length > 300 ? `${trimmed.slice(0, 300)}…` : trimmed;
+      }
+    }
 
     const prefix = model.mode === "edit" ? "Image edit" : "Image generation";
 
@@ -408,7 +418,14 @@ export async function generateImageCore(
     if (res.status === 503 || res.status === 502) {
       return { image: null, error: `Image service unavailable (${res.status}). Try again shortly.`, status: res.status };
     }
-    return { image: null, error: `${prefix} failed (${res.status}): ${detail || "unknown error"}`, status: 502 };
+    if (res.status === 500) {
+      return {
+        image: null,
+        error: `${prefix} failed (500): ${detail || "NVIDIA returned an empty error body — check server logs."}`,
+        status: 502,
+      };
+    }
+    return { image: null, error: `${prefix} failed (${res.status}): ${detail || "no error detail returned"}`, status: 502 };
   }
 
   // ── Extract image from response ──

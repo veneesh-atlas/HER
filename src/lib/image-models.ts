@@ -238,7 +238,10 @@ export function isValidAspectRatio(ratio: string): ratio is AspectRatio {
 /** Clamp a number to a range. Returns the default if value is not a finite number. */
 export function clampToRange(value: unknown, range: Range, defaultValue: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return defaultValue;
-  return Math.max(range.min, Math.min(range.max, Math.round(value)));
+  // Preserve float precision — some models (e.g. Flux Kontext) are calibrated
+  // for non-integer cfg_scale values like 3.5 and rounding to 4 pushes them
+  // outside their tuned range.
+  return Math.max(range.min, Math.min(range.max, value));
 }
 
 /**
@@ -280,10 +283,14 @@ export function buildImagePayload(
     payload.height = dims.height;
   } else if (model.capabilities.aspect_ratio) {
     // Send native aspect_ratio string
-    if (model.mode === "edit") {
-      // For edit models, use "match_input_image" as safe default
-      payload.aspect_ratio = ratioStr === "match_input_image" ? ratioStr
-        : isValidAspectRatio(ratioStr) ? ratioStr : "match_input_image";
+    if (model.mode === "edit" && params.image) {
+      // Edit mode WITH a source image: always match the input dimensions.
+      // Forcing a different aspect ratio (e.g. "1:1" on a non-square source)
+      // makes Kontext's image-aware pipeline crash with a 500.
+      payload.aspect_ratio = "match_input_image";
+    } else if (model.mode === "edit") {
+      // Edit mode with no image (shouldn't normally happen): pick a safe default.
+      payload.aspect_ratio = isValidAspectRatio(ratioStr) ? ratioStr : "match_input_image";
     } else {
       payload.aspect_ratio = isValidAspectRatio(ratioStr) ? ratioStr : "1:1";
     }
@@ -317,15 +324,17 @@ export function buildImagePayload(
     }
   }
 
-  // Seed — only include if model supports it and value is valid
+  // Seed — only include if model supports it AND the value is non-zero.
+  // Several NVIDIA endpoints (notably Flux Kontext) reject `seed: 0` with a
+  // 500. Treat 0 as "omit and let the provider pick".
   if (model.capabilities.seed && model.ranges.seed) {
     const seedVal = clampToRange(
       params.seed,
       model.ranges.seed,
       model.defaults.seed as number
     );
-    if (typeof seedVal === "number" && Number.isFinite(seedVal)) {
-      payload.seed = seedVal;
+    if (typeof seedVal === "number" && Number.isFinite(seedVal) && seedVal > 0) {
+      payload.seed = Math.floor(seedVal);
     }
   }
 
