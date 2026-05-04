@@ -8,7 +8,8 @@
  *   self_portrait   → Flux.1 Kontext (edit + reference image for consistency)
  *   creative        → Flux.1 Dev (highest control for artistic output)
  *   casual          → Flux.2 Klein 4B (fastest, good for everyday scenes)
- *   realistic_scene → Stable Diffusion 3 Medium (balanced, flexible realism)
+ *   realistic_scene → Flux.1 Dev (proven hosted endpoint; SD3.5 Large is
+ *                                 self-hosted-only on NVIDIA's catalog)
  */
 
 export type ImageType =
@@ -33,7 +34,7 @@ export interface RouteConfig {
 /**
  * Map an image type + desired aspect ratio to the optimal model configuration.
  *
- * @param imageType - Classifier output image type (null falls back to SD3)
+ * @param imageType - Classifier output image type (null falls back to Flux.1 Dev)
  * @param aspectRatio - Desired aspect ratio from the classifier
  */
 export function routeImageType(
@@ -89,12 +90,12 @@ export function routeImageType(
   }
 
   return {
-    modelId: "stable-diffusion-3-medium",
+    modelId: "flux-1-dev",
     mode: "create",
     useReferenceImage: false,
     overrides: {
-      steps: 40,
-      cfg_scale: 5,
+      steps: 30,
+      cfg_scale: 3.5,
       aspect_ratio: aspectRatio,
     },
   };

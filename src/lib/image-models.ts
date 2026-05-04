@@ -140,38 +140,6 @@ export const IMAGE_MODELS: ImageModelDef[] = [
       seed: { min: 0, max: 2147483647 },
     },
   },
-  {
-    id: "stable-diffusion-3-medium",
-    label: "Stable Diffusion 3",
-    description: "Flexible classic",
-    quality: "stable",
-    mode: "create",
-    endpoint: "https://ai.api.nvidia.com/v1/genai/stabilityai/stable-diffusion-3-medium",
-    envKey: "NVIDIA_SD3_MEDIUM_API_KEY",
-    defaults: {
-      cfg_scale: 5,
-      steps: 40,
-      seed: 0,
-      aspect_ratio: "1:1",
-      negative_prompt: "",
-    },
-    capabilities: {
-      prompt: true,
-      width_height: false,
-      aspect_ratio: true,  // SD3 accepts native aspect_ratio string
-      steps: true,
-      cfg_scale: true,
-      negative_prompt: true,
-      seed: true,
-      image_input: false,
-      mode_field: false,
-    },
-    ranges: {
-      steps: { min: 1, max: 50 },
-      cfg_scale: { min: 1, max: 15 },
-      seed: { min: 0, max: 2147483647 },
-    },
-  },
 
   // ── EDIT model ───────────────────────────────────────────
   {
@@ -209,8 +177,8 @@ export const IMAGE_MODELS: ImageModelDef[] = [
 
 // ── Helpers ────────────────────────────────────────────────
 
-/** Default model for the "create" mode (backward compatible — SD3 was original) */
-export const DEFAULT_CREATE_MODEL_ID = "stable-diffusion-3-medium";
+/** Default model for the "create" mode */
+export const DEFAULT_CREATE_MODEL_ID = "flux-1-dev";
 
 /** Default model for the "edit" mode */
 export const DEFAULT_EDIT_MODEL_ID = "flux-1-kontext-dev";
@@ -350,7 +318,7 @@ export function buildImagePayload(
  * Resolve the API key for a given model at runtime (server-side only).
  *
  * Resolution order:
- *   1. Model-specific env variable (e.g. NVIDIA_SD3_MEDIUM_API_KEY)
+ *   1. Model-specific env variable (e.g. NVIDIA_FLUX1_DEV_API_KEY)
  *   2. Shared fallback: NVIDIA_IMAGE_API_KEY
  *
  * Returns the key string, or null if neither is set.

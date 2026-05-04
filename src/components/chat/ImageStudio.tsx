@@ -131,16 +131,14 @@ const QUALITY_LABELS: Record<ModelQuality, string> = {
 
 /** Per-model soft guidance copy (keyed by model ID for precision) */
 const MODEL_GUIDANCE: Record<string, string> = {
-  "stable-diffusion-3-medium": "Most reliable for everyday creations.",
+  "flux-1-dev": "Most reliable for everyday creations.",
   "flux-2-klein-4b": "Fast and lightweight — great for quick ideas.",
-  "flux-1-dev": "More stylized control, but can take a little longer.",
   "flux-1-kontext-dev": "Built for image edits and transformations.",
 };
 
 /** Per-model soft retry hint (only shown for less-reliable models) */
 const MODEL_HINT: Record<string, string> = {
   "flux-2-klein-4b": "If a generation stalls, try once more or switch to Recommended.",
-  "flux-1-dev": "Best when you want to experiment — results can vary.",
   "flux-1-kontext-dev": "Best with clear, full-size images. Try again if it doesn't respond the first time.",
 };
 
