@@ -5,12 +5,13 @@
  * Each layer is a separate module that can be tuned independently.
  *
  * Architecture:
- *   persona   → who she is (rarely changes)
- *   style     → how she speaks (cadence, length, formatting)
+ *   persona    → who she is (rarely changes)
+ *   style      → how she speaks (cadence, length, formatting)
  *   boundaries → what she never does (anti-patterns + safety)
- *   dynamics  → how she relates to the user (emotional texture)
+ *   dynamics   → how she relates to the user (emotional texture)
+ *   reflection → emergent emotional intelligence (silent reflect + behavioral freedom)
  *   initiative → how she keeps conversations alive (proactivity)
- *   modes     → energy overlays for different conversation moods
+ *   modes      → energy overlays for different conversation moods
  *
  * To tune HER's personality:
  *   - Edit individual layer files, not this assembler
@@ -24,6 +25,7 @@ import { PERSONA } from "./persona";
 import { STYLE } from "./style";
 import { BOUNDARIES } from "./boundaries";
 import { DYNAMICS } from "./dynamics";
+import { REFLECTION } from "./reflection";
 import { INITIATIVE } from "./initiative";
 import { MODE_OVERLAYS } from "./modes";
 import { buildRapportContext, type RapportLevel } from "../rapport";
@@ -118,6 +120,7 @@ export function buildSystemPrompt(options: PromptOptions = {}): string {
     PERSONA,
     STYLE,
     DYNAMICS,
+    REFLECTION,
     buildRapportContext(options.rapportLevel ?? 0),
     INITIATIVE,
     BOUNDARIES,
@@ -160,5 +163,6 @@ export { PERSONA } from "./persona";
 export { STYLE } from "./style";
 export { BOUNDARIES } from "./boundaries";
 export { DYNAMICS } from "./dynamics";
+export { REFLECTION } from "./reflection";
 export { INITIATIVE } from "./initiative";
 export { MODE_OVERLAYS } from "./modes";

@@ -483,6 +483,8 @@ export default function ChatPage() {
 
   // ── Cross-conversation memory ──
   const [memoryContext, setMemoryContext] = useState<string | null>(null);
+  /** Compact behavioral-only context (Step EXP+1) — never contains emotion labels. */
+  const [interactionContext, setInteractionContext] = useState<string | null>(null);
 
   /**
    * Fire-and-forget: extract memories from a set of messages and refresh context.
@@ -587,6 +589,24 @@ export default function ChatPage() {
         .catch(() => {});
     }).catch(() => {});
   }, []);
+
+  // Step EXP+1: load the current interaction texture (behavioral signals only).
+  // Re-runs when the active conversation changes so per-convo signals win.
+  useEffect(() => {
+    getEffectiveUserId().then((userId) => {
+      const url = `/api/interaction?userId=${encodeURIComponent(userId)}`
+        + (activeConvoId ? `&conversationId=${encodeURIComponent(activeConvoId)}` : "");
+      authFetch(url, {}, accessTokenRef.current)
+        .then((res) => res.json())
+        .then((data) => {
+          if (typeof data?.interactionContext === "string" || data?.interactionContext === null) {
+            setInteractionContext(data.interactionContext);
+          }
+        })
+        .catch(() => {});
+    }).catch(() => {});
+  }, [activeConvoId]);
+
   useEffect(() => {
     const saved = loadSession();
     if (saved && saved.messages.length > 0) {
@@ -1205,7 +1225,7 @@ export default function ChatPage() {
           mode: conversationMode,
           rapportLevel: currentRapport,
           memoryContext: memoryContext ?? undefined,
-          continuityContext: [continuityContext, reactionContext].filter(Boolean).join("\n") || undefined,
+          continuityContext: [continuityContext, reactionContext, interactionContext].filter(Boolean).join("\n") || undefined,
           responseModeInstruction,
           antiRepetitionInstruction,
           userTimezone: detectUserTimezone(),
@@ -1311,6 +1331,54 @@ export default function ChatPage() {
         extractMemoryRef.current(updatedMessages);
       }
 
+      // ── Step EXP+1: extract a behavioral interaction signal for this turn ──
+      // Fire-and-forget. NEVER stores emotions — only observable patterns.
+      // Refreshes the in-memory interactionContext so the next reply has it.
+      //
+      // EXP+2 cost controls:
+      //   - sample every 2nd user turn (not every turn)
+      //   - skip when the user message is trivially short (<10 chars) — no signal there
+      const userMsgCount = updatedMessages.filter((m) => m.role === "user").length;
+      const userMsgLong = userMessage.content.trim().length >= 10;
+      const shouldExtractSignal =
+        isAuthenticated &&
+        accessTokenRef.current &&
+        userMsgLong &&
+        userMsgCount % 2 === 0;
+      if (shouldExtractSignal) {
+        const recentForSignal = updatedMessages
+          .slice(-10)
+          .map((m) => ({ role: m.role, content: m.content }));
+        authFetch("/api/interaction/extract", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId,
+            conversationId: convoId,
+            messageId: herMessageId,
+            recentMessages: recentForSignal,
+            latestUserMessage: userMessage.content,
+            latestHerResponse: fullText,
+          }),
+        }, accessTokenRef.current)
+          .then((r) => r.json())
+          .then((data) => {
+            if (data?.stored) {
+              const url = `/api/interaction?userId=${encodeURIComponent(userId)}`
+                + (convoId ? `&conversationId=${encodeURIComponent(convoId)}` : "");
+              authFetch(url, {}, accessTokenRef.current)
+                .then((r) => r.json())
+                .then((d) => {
+                  if (typeof d?.interactionContext === "string" || d?.interactionContext === null) {
+                    setInteractionContext(d.interactionContext);
+                  }
+                })
+                .catch(() => {});
+            }
+          })
+          .catch(() => {});
+      }
+
       // ── Memory feedback loop (Step 19 Part G, auth users only) ──
       // Detects corrections, reinforcements, and emotional shifts in memories
       if (isAuthenticated && accessTokenRef.current) {
@@ -1365,7 +1433,7 @@ export default function ChatPage() {
       sendingRef.current = false;
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [activeConvoId, refreshConversations, conversationMode, memoryContext, replyingTo, LOCAL_IMAGE, isAuthenticated]);
+  }, [activeConvoId, refreshConversations, conversationMode, memoryContext, interactionContext, replyingTo, LOCAL_IMAGE, isAuthenticated]);
 
   const handleRetry = useCallback(() => {
     if (!retryContent || sendingRef.current) return;
