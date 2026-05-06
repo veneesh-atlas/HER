@@ -32,6 +32,7 @@ import {
   markFollowupSent,
   countIgnoredLowPriority24h,
   detectMissedEvent,
+  isUserActiveRecently,
 } from "@/lib/scheduled-events";
 import { buildNotificationMessage, buildEmotionAwareMessage } from "@/lib/notification-messages";
 import { getNotificationSettings, isQuietHours, isHighPriorityEvent } from "@/lib/notification-settings";
@@ -87,6 +88,20 @@ export async function GET(req: NextRequest) {
 
   for (const event of events) {
     try {
+      // ── Step 17.X+2: Active Conversation Suppression ──
+      // Don't ping the user while they're mid-chat. Skip silently — the
+      // event stays pending and gets reprocessed on the next cron tick.
+      // Applies to ALL types (including high-priority): if you're already
+      // talking to her, the reminder doesn't need to interrupt the call.
+      const activeNow = await isUserActiveRecently(event.user_id, event.conversation_id, 2);
+      if (activeNow) {
+        console.log("[HER Cron] SKIPPED \u2014 user active", {
+          eventId: event.id,
+          type: event.type,
+        });
+        continue;
+      }
+
       const settings = await getNotificationSettings(event.user_id);
 
       // ── Priority routing (Part A) ─────────────────────────
@@ -234,6 +249,19 @@ export async function GET(req: NextRequest) {
       // Cheap pre-check: emotion extraction is the most expensive step here,
       // so don't run it on events that obviously aren't ready under any rule.
       if (ageMs < 12 * 60 * 1000) continue;
+
+      // ── Step 17.X+2: Active Conversation Suppression (missed-pass) ──
+      // If the user came back into the chat in the last 2 min, don't pile a
+      // follow-up on top of the live conversation. Skip silently — the event
+      // remains a missed-candidate and the next tick will retry once the
+      // user goes quiet again.
+      const activeNow = await isUserActiveRecently(event.user_id, event.conversation_id, 2);
+      if (activeNow) {
+        console.log("[HER Cron] SKIPPED FOLLOW-UP \u2014 user active", {
+          eventId: event.id,
+        });
+        continue;
+      }
 
       const emotional = await extractEmotionalContext(event, apiKey);
       const ignored24h = await countIgnoredLowPriority24h(event.user_id);

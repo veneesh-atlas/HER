@@ -335,6 +335,45 @@ export async function cancelEvent(eventId: string): Promise<void> {
 // ── Nudge Helpers ──────────────────────────────────────────
 
 /**
+ * Step 17.X+2 — Active Conversation Suppression.
+ *
+ * Returns true if the user has sent at least one message in the given
+ * conversation within the last `windowMinutes`. Used by the cron to skip
+ * notifications when the user is mid-chat — a real person doesn't text you
+ * a reminder while you're already talking to them.
+ *
+ * Lightweight gate only: any failure or missing conversation_id returns
+ * false (treat as inactive) so we never block legit notifications on a
+ * transient DB error.
+ */
+export async function isUserActiveRecently(
+  userId: string,
+  conversationId: string | null,
+  windowMinutes: number = 2,
+): Promise<boolean> {
+  if (!conversationId) return false;
+  const client = getSupabaseClient();
+  if (!client) return false;
+
+  const since = new Date(Date.now() - windowMinutes * 60 * 1000).toISOString();
+
+  try {
+    const { count, error } = await client
+      .from("messages")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("conversation_id", conversationId)
+      .eq("role", "user")
+      .gte("created_at", since);
+
+    if (error) return false;
+    return (count ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Get the last activity timestamp for a user (last message time).
  */
 export async function getUserLastActivity(userId: string): Promise<Date | null> {
